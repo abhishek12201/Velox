@@ -74,13 +74,19 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{ a
     res.status(200).json({ ok: true });
   });
 
-  app.post('/api/reset', (req, res) => {
+  app.post('/api/reset', async (req, res) => {
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
       ? req.body as { scope?: unknown; session_id?: unknown }
       : {};
     if (body.scope === 'all') {
-      sessions.clear();
-      res.status(200).json({ ok: true, reset: 'all' });
+      try {
+        const reset = await registry.invokeApp('vault__reset', {}, defaultAsOf);
+        if (reset.isError === true) throw new Error('Vault rejected the reset request');
+        sessions.clear();
+        res.status(200).json({ ok: true, reset: 'all' });
+      } catch (error) {
+        res.status(502).json({ error: error instanceof Error ? error.message : 'Could not clear vault data' });
+      }
       return;
     }
     if (body.scope === 'session' && typeof body.session_id === 'string' && body.session_id) {

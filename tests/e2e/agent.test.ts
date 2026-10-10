@@ -110,7 +110,7 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
     expect(events.findIndex((event) => event.type === 'card')).toBeGreaterThan(lastResultIndex);
 
     const suppliedTools = providerInputs.flatMap((input) => input.tools.map((tool) => tool.name));
-    expect(suppliedTools.some((name) => /confirm_|cancel_booking|save_trip/.test(name))).toBe(false);
+    expect(suppliedTools.some((name) => /confirm_|cancel_booking|save_trip|vault__reset/.test(name))).toBe(false);
     expect(providerInputs.some((input) => input.messages.some((message) => {
       if (message.role !== 'tool' || !/hold_(flight|stay|table)$/.test(message.name ?? '')) return false;
       const value: unknown = JSON.parse(message.content);

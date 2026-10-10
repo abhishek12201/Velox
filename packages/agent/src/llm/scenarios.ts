@@ -2,6 +2,11 @@ export const demoPhrases = ['Weekend in Goa under 20k'];
 
 export const scenarios = [
   {
+    id: 'goa-memory',
+    match: /same as last Goa trip(?:,\s*but)?\s+my sister is coming/i,
+    budget: 20_000,
+  },
+  {
     id: 'goa-weekend',
     match: /weekend\s+in\s+goa.*under\s*(?:inr\s*)?20k/i,
     budget: 20_000,

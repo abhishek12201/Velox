@@ -15,9 +15,9 @@
     "dev:all": "concurrently \"npm run dev:servers\" \"npm run dev:agent\" \"vite --config packages/web/vite.config.ts\"",
     "dev:servers": "concurrently \"tsx packages/servers/src/main.ts air\" \"tsx packages/servers/src/main.ts stay\" \"tsx packages/servers/src/main.ts local\" \"tsx packages/servers/src/main.ts vault\"",
     "demo": "node -e \"console.log('not implemented yet')\"",
-    "seed:demo": "node -e \"console.log('not implemented yet')\"",
+    "seed:demo": "tsx scripts/seed-demo.ts",
     "seed:peek": "tsx --eval \"import { flightsFor, forecast, places, stays } from './packages/core/src/seed/index.ts'; console.log('flight', flightsFor('BLR','GOX','2026-06-30','2026-06-27')[0]); console.log('stay', stays()[0]); console.log('place', places()[0]); console.log('forecast', forecast('north','2026-07-04','2026-07-01'));\"",
-    "reset": "node -e \"console.log('not implemented yet')\""
+    "reset": "tsx scripts/reset.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.699.0",

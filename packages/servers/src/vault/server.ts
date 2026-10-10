@@ -144,6 +144,22 @@ export function createVaultServer(options: { dbPath?: string; basePort?: number 
     return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
   });
 
+  server.registerTool('reset', {
+    description: 'Clear all saved profile preferences and trip history.',
+    inputSchema: {},
+    outputSchema: z.object({ ok: z.literal(true) }),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    _meta: { 'velox/audience': 'app' },
+  }, async (): Promise<any> => {
+    const clearData = db.transaction(() => {
+      db.prepare('DELETE FROM trips').run();
+      db.prepare('DELETE FROM profile').run();
+    });
+    clearData();
+    const result = { ok: true as const };
+    return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+  });
+
   let closePromise: Promise<void> | undefined;
   return {
     server,

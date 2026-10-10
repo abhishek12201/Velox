@@ -1,5 +1,5 @@
 # STATE (opencode keeps this <=40 lines; replace stale lines, no history)
-done: P7
+done: P8
 next: none
 license: Apache-2.0 (file added by human)
 llm_default: mock
@@ -19,4 +19,8 @@ decisions:
 - Budget replanning releases comfort holds before switching to a cheaper feasible itinerary.
 - Confirmation uses allSettled, signed per-hold tokens, compensation, up to two recoveries, and vault persistence.
 - Expired holds are reacquired for the same offers before alternative replanning.
+- Vault profile context is refreshed each model turn and byte-capped below 300 tokens.
+- Stated and inferred preferences retain their evidence; remembered flight limits emit a chip.
+- Same-trip mock memory loads the profile and latest trip, scales party size and budget, and honors departure limits.
+- seed:demo creates synthetic history; reset clears workspace and configured data directories.
 open_issues:

@@ -114,6 +114,7 @@ export class ScenarioProvider implements LlmProvider {
     if (!asOf) throw new Error('Mock provider system prompt is missing the current time');
     const userTexts = input.messages.filter((message) => message.role === 'user').map((message) => message.content);
     const text = lastUserText(input.messages);
+    const responses = toolResponses(input.messages);
     if (userTexts.some((userText) => /S8|unauthorized confirmation/i.test(userText))) {
       const refusal = toolResponses(input.messages).find((response) =>
         response.name === 'air__confirm_flight' && typeof response.value.message === 'string',
@@ -127,13 +128,30 @@ export class ScenarioProvider implements LlmProvider {
       }]);
     }
 
+    const preferenceText = userTexts.find((userText) => /hate flights before 7\s*(?:am|a\.m\.)/i.test(userText));
+    const rememberedPreference = responses.find((response) =>
+      response.name === 'vault__remember' && response.args.key === 'avoid_departure_before',
+    );
+    if (preferenceText && !rememberedPreference) {
+      return result([inputFor('vault__remember', input.tools, {
+        key: 'avoid_departure_before',
+        value: '07:00',
+        source: 'stated',
+        evidence: preferenceText,
+      }, 'remember-departure-time')]);
+    }
+
     const matched = scenarios.find((scenario) => userTexts.some((userText) => scenario.match.test(userText)));
-    if (!matched) return result([{ type: 'text', text: unknownScenarioMessage }], 1);
+    if (!matched) {
+      if (preferenceText && rememberedPreference) {
+        return result([{ type: 'text', text: 'Understood. I will avoid flights before 07:00.' }], 1);
+      }
+      return result([{ type: 'text', text: unknownScenarioMessage }], 1);
+    }
     const excludedOffers = new Set(userTexts.flatMap((userText) =>
       [...userText.matchAll(/without ([\w-]+)/gi)].map((match) => match[1]).filter((id): id is string => Boolean(id)),
     ));
     const dates = datesFrom(asOf);
-    const responses = toolResponses(input.messages);
     const recovery = input.messages.some((message) => message.role === 'user' && message.content.includes('Confirmation failed'));
     const overBudgetProposal = responses.find((item) => item.name === 'internal__propose_itinerary' && item.value.ok === false);
     const hasReleasedOverBudgetHolds = responses.some((response) =>
@@ -141,10 +159,45 @@ export class ScenarioProvider implements LlmProvider {
     );
     const failedProposal = overBudgetProposal && !hasReleasedOverBudgetHolds ? overBudgetProposal : undefined;
     const replanCheaper = Boolean(overBudgetProposal) || recovery;
+    const memoryScenario = matched.id === 'goa-memory';
+    const party = memoryScenario ? 2 : 1;
+    let memoryProfile: Array<{ key: string; value: string }> = [];
+    let previousTrip: { party: number; total: number } | undefined;
+    if (memoryScenario) {
+      const profileResponse = responses.find((response) => response.name === 'vault__get_profile');
+      const tripsResponse = responses.find((response) => response.name === 'vault__list_trips');
+      const memoryCalls = [
+        ...(!profileResponse ? [inputFor('vault__get_profile', input.tools, {}, 'memory-profile')] : []),
+        ...(!tripsResponse ? [inputFor('vault__list_trips', input.tools, { limit: 5 }, 'memory-trips')] : []),
+      ];
+      if (memoryCalls.length) return result(memoryCalls);
+      const profile = profileResponse?.value.profile;
+      if (Array.isArray(profile)) {
+        memoryProfile = profile.filter((entry): entry is { key: string; value: string } =>
+          Boolean(entry) && typeof entry === 'object' &&
+          typeof (entry as { key?: unknown }).key === 'string' &&
+          typeof (entry as { value?: unknown }).value === 'string',
+        );
+      }
+      const trips = tripsResponse?.value.trips;
+      const firstTrip = Array.isArray(trips) ? trips[0] : undefined;
+      if (firstTrip && typeof firstTrip === 'object') {
+        const trip = firstTrip as { party?: unknown; total?: unknown };
+        if (Number.isInteger(trip.party) && typeof trip.total === 'number') {
+          previousTrip = { party: trip.party as number, total: trip.total };
+        }
+      }
+    }
+    const avoidDepartureBefore = memoryProfile.find((entry) => entry.key === 'avoid_departure_before')?.value === '07:00' ||
+      input.system.includes('avoid_departure_before=07:00');
+    const previousBudget = previousTrip
+      ? Math.ceil(previousTrip.total * party / previousTrip.party)
+      : matched.budget * party;
+    const budget = memoryScenario ? previousBudget : matched.budget;
     const searchSpecifications = [
-      { name: 'air__search_flights', args: { origin: 'BLR', destination: 'GOX', date: dates.departure, pax: 1 } },
-      { name: 'air__search_flights', args: { origin: 'GOX', destination: 'BLR', date: dates.returnDate, pax: 1 } },
-      { name: 'stay__search_stays', args: { area: 'north', checkin: dates.departure, checkout: dates.checkout, guests: 1 } },
+      { name: 'air__search_flights', args: { origin: 'BLR', destination: 'GOX', date: dates.departure, pax: party, ...(avoidDepartureBefore ? { depart_after: '07:00' } : {}) } },
+      { name: 'air__search_flights', args: { origin: 'GOX', destination: 'BLR', date: dates.returnDate, pax: party, ...(avoidDepartureBefore ? { depart_after: '07:00' } : {}) } },
+      { name: 'stay__search_stays', args: { area: 'north', checkin: dates.departure, checkout: dates.checkout, guests: party } },
       { name: 'local__search_places', args: { area: 'north', kind: 'food' } },
       { name: 'local__search_places', args: { area: 'north', kind: 'activity' } },
     ];
@@ -162,7 +215,7 @@ export class ScenarioProvider implements LlmProvider {
     const foods = offerList(responses, (response) => response.name === 'local__search_places' && response.args.kind === 'food').filter((offer) => !excludedOffers.has(offer.id));
     const activities = offerList(responses, (response) => response.name === 'local__search_places' && response.args.kind === 'activity').filter((offer) => !excludedOffers.has(offer.id));
     const expensive = matched.id === 'goa-comfort' && !replanCheaper;
-    const plan = expensive ? comfortPlan(1, 2, dates.departure, asOf) : cheapestPlan(1, 2, dates.departure, asOf);
+    const plan = expensive ? comfortPlan(party, 2, dates.departure, asOf) : cheapestPlan(party, 2, dates.departure, asOf);
     const premium = 'premiumFood' in plan;
     const preferredFoodId = premium ? plan.premiumFood.id : plan.cheapFood.id;
     const preferredActivityId = premium ? plan.premiumActivity.id : plan.cheapActivity.id;
@@ -177,15 +230,15 @@ export class ScenarioProvider implements LlmProvider {
     if (selected.some((offer) => !offer)) return result([{ type: 'text', text: 'I could not find all trip options.' }], 1);
 
     const holdSpecs = [
-      { tool: 'air__hold_flight', offer: selected[0] as Offer, args: { pax: 1 } },
-      { tool: 'air__hold_flight', offer: selected[1] as Offer, args: { pax: 1 } },
-      { tool: 'stay__hold_stay', offer: selected[2] as Offer, args: { checkin: dates.departure, checkout: dates.checkout, guests: 1 } },
+      { tool: 'air__hold_flight', offer: selected[0] as Offer, args: { pax: party } },
+      { tool: 'air__hold_flight', offer: selected[1] as Offer, args: { pax: party } },
+      { tool: 'stay__hold_stay', offer: selected[2] as Offer, args: { checkin: dates.departure, checkout: dates.checkout, guests: party } },
       ...selected.slice(3, 5).map((offer, index) => ({
         tool: 'local__hold_table',
         offer: offer as Offer,
-        args: { when: `${dates.departure}T${index === 0 ? '19:00' : '20:00'}:00.000Z`, party: 1 },
+        args: { when: `${dates.departure}T${index === 0 ? '19:00' : '20:00'}:00.000Z`, party },
       })),
-      { tool: 'local__hold_table', offer: selected[5] as Offer, args: { when: `${dates.returnDate}T10:00:00.000Z`, party: 1 } },
+      { tool: 'local__hold_table', offer: selected[5] as Offer, args: { when: `${dates.returnDate}T10:00:00.000Z`, party } },
     ];
     const activeHolds = responses.filter((response) =>
       response.value.state === 'held' && typeof response.value.hold_id === 'string' &&
@@ -236,7 +289,7 @@ export class ScenarioProvider implements LlmProvider {
       return result([inputFor('internal__propose_itinerary', input.tools, {
         title: 'Weekend in Goa',
         hold_ids: holdIds,
-        budget: 20_000,
+        budget,
       }, `propose-${proposed}`)]);
     }
     return result([{ type: 'text', text: 'Your round-trip weekend itinerary is ready.' }], 1);

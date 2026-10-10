@@ -1,33 +1,51 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createServeApp } from '../kit/serve.js';
 import { createVaultServer } from './server.js';
 
 async function withVault<T>(run: (client: Client, vault: ReturnType<typeof createVaultServer>) => Promise<T>): Promise<T> {
-  const vault = createVaultServer({ dbPath: ':memory:' });
+  const dataDir = await mkdtemp(join(tmpdir(), 'velox-vault-test-'));
+  const vault = createVaultServer({ dbPath: join(dataDir, 'vault.db') });
   const { server } = createServeApp(() => vault, { serverName: 'vault', port: 0 });
-  await new Promise<void>((resolve, reject) => {
-    if (server.listening) return resolve();
-    server.once('error', reject);
-    server.once('listening', resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Vault test server did not bind to a TCP port');
-  const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`));
   const client = new Client({ name: 'vault-test-client', version: '1.0.0' }, { capabilities: {} });
+  let transport: StreamableHTTPClientTransport | undefined;
   let connected = false;
   try {
+    await new Promise<void>((resolve, reject) => {
+      if (server.listening) return resolve();
+      server.once('error', reject);
+      server.once('listening', resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Vault test server did not bind to a TCP port');
+    transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`));
     await client.connect(transport);
     connected = true;
     return await run(client, vault);
   } finally {
-    if (connected) await transport.terminateSession();
-    await client.close();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
-    });
+    const errors: unknown[] = [];
+    const cleanup = async (fn: () => Promise<void>) => {
+      try {
+        await fn();
+      } catch (error) {
+        errors.push(error);
+      }
+    };
+    if (connected && transport) await cleanup(() => transport?.terminateSession() ?? Promise.resolve());
+    await cleanup(() => client.close());
+    if (server.listening) {
+      await cleanup(() => new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      }));
+    }
+    await cleanup(() => vault.close());
+    await cleanup(() => rm(dataDir, { recursive: true, force: true }));
+    if (errors.length) throw new AggregateError(errors, 'Vault test cleanup failed');
   }
 }
 

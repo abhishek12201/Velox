@@ -116,6 +116,55 @@ function toolDefinitions(registryTools: Registry['tools']): ToolDefinition[] {
   return [...registryTools.filter((tool) => tool.audience !== 'app'), ...internalTools];
 }
 
+function compactProfile(value: Record<string, unknown>): string {
+  const profile = value.profile;
+  if (!Array.isArray(profile)) throw new Error('Vault get_profile returned an invalid profile');
+  const encoder = new TextEncoder();
+  let context = '';
+  for (const entry of profile) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error('Vault get_profile returned an invalid profile entry');
+    }
+    const record = entry as Record<string, unknown>;
+    if (
+      typeof record.key !== 'string' || typeof record.value !== 'string' ||
+      (record.source !== 'stated' && record.source !== 'inferred') ||
+      typeof record.evidence !== 'string'
+    ) throw new Error('Vault get_profile returned an invalid profile entry');
+    const item = `${record.key}=${record.value} (${record.source}; ${record.evidence})`;
+    const remaining = 240 - encoder.encode(context).length;
+    if (remaining <= 0) break;
+    const segment = `${context ? ' ' : ''}${item}`;
+    let bytes = 0;
+    let truncated = '';
+    for (const character of segment) {
+      const size = encoder.encode(character).length;
+      if (bytes + size > remaining) break;
+      truncated += character;
+      bytes += size;
+    }
+    context += truncated;
+    if (truncated.length < segment.length) break;
+  }
+  return context;
+}
+
+function mergeRememberedProfile(profile: Record<string, unknown>, value: Record<string, unknown>): Record<string, unknown> {
+  const current = profile.profile;
+  const entry = readStructuredValue(value);
+  if (
+    !Array.isArray(current) ||
+    typeof entry.key !== 'string' || typeof entry.value !== 'string' ||
+    (entry.source !== 'stated' && entry.source !== 'inferred') ||
+    typeof entry.evidence !== 'string'
+  ) throw new Error('Vault remember returned an invalid profile entry');
+  const existing = current.filter((item) =>
+    item && typeof item === 'object' && !Array.isArray(item) &&
+    (item as Record<string, unknown>).key !== entry.key,
+  );
+  return { ...profile, profile: [...existing, entry] };
+}
+
 export async function runLoop(
   session: AgentSession,
   provider: LlmProvider,
@@ -126,10 +175,12 @@ export async function runLoop(
   const maxTokens = options.maxTokens ?? Number(process.env.VELOX_MAX_TOKENS ?? 1500);
   const availableTools = toolDefinitions(registry.tools);
   const events: LoopEvent[] = [];
+  let profile = await registry.invoke('vault__get_profile', {}, session.asOf);
+  let system = systemPrompt(session.asOf, compactProfile(profile));
 
   for (let step = 0; step < maxSteps; step += 1) {
     const answer = await provider.converse({
-      system: systemPrompt(session.asOf),
+      system,
       messages: session.messages,
       tools: availableTools,
       maxTokens,
@@ -184,7 +235,12 @@ export async function runLoop(
       if (server === 'vault' && tool === 'remember' && result.ok) {
         const key = result.call.input.key;
         const value = result.call.input.value;
-        events.push({ type: 'chip', text: `Remembered ${String(key)}: ${String(value)}` });
+        const text = key === 'avoid_departure_before' && value === '07:00'
+          ? 'Remembered: avoids flights before 07:00'
+          : `Remembered: ${String(key)}=${String(value)}`;
+        events.push({ type: 'chip', text });
+        profile = mergeRememberedProfile(profile, result.response);
+        system = systemPrompt(session.asOf, compactProfile(profile));
       }
     }
   }

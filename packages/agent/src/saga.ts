@@ -167,7 +167,7 @@ export async function confirmPlan(
       const save = await registry.invokeApp('vault__save_trip', {
         title: card.title,
         plan_json: JSON.stringify({
-          party: 1,
+          party: holds.reduce((largest, hold) => Math.max(largest, hold?.qty ?? 1), 1),
           start: typeof startDate === 'string' ? startDate.slice(0, 10) : plan.created.slice(0, 10),
           end: typeof endDate === 'string' ? endDate.slice(0, 10) : plan.created.slice(0, 10),
           total: plan.total,
