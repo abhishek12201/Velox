@@ -1,0 +1,38 @@
+{
+  "name": "velox-root",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "check": "tsc --build --pretty false && vitest run --reporter=dot",
+    "dev:all": "concurrently \"tsx --watch packages/agent/src/index.ts\" \"tsx --watch packages/servers/src/index.ts\" \"vite --config packages/web/vite.config.ts\"",
+    "demo": "node -e \"console.log('not implemented yet')\"",
+    "seed:demo": "node -e \"console.log('not implemented yet')\"",
+    "reset": "node -e \"console.log('not implemented yet')\""
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.699.0",
+    "@modelcontextprotocol/sdk": "^1.11.4",
+    "better-sqlite3": "^11.7.0",
+    "express": "^5.1.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/servers" },
+    { "path": "./packages/agent" },
+    { "path": "./packages/web" },
+    { "path": "./packages/veloxcheck" }
+  ],
+  "include": [
+    "tests/**/*.ts",
+    "scripts/**/*.ts",
+    "scripts/**/*.mjs"
+  ]
+}
