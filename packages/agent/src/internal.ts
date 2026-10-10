@@ -8,6 +8,7 @@ export interface SessionLedger {
   plans: Map<string, Plan>;
   cards: Map<string, Extract<Card, { kind: 'itinerary' }>>;
   lastCarousel?: Card;
+  swaps: Map<string, { oldHoldId: string; newHoldId: string; tripPlanId: string; day: string; reason: string }>;
 }
 
 export interface InternalToolResult {
@@ -108,7 +109,7 @@ function makeItinerary(
   const plan: Plan = {
     plan_id: randomUUID(),
     session_id: sessionId,
-    kind: 'trip',
+      kind: 'trip',
     hold_ids: holdIds,
     total,
     budget,

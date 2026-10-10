@@ -1,5 +1,5 @@
 # STATE (opencode keeps this <=40 lines; replace stale lines, no history)
-done: P8
+done: P9
 next: none
 license: Apache-2.0 (file added by human)
 llm_default: mock
@@ -22,5 +22,7 @@ decisions:
 - Vault profile context is refreshed each model turn and byte-capped below 300 tokens.
 - Stated and inferred preferences retain their evidence; remembered flight limits emit a chip.
 - Same-trip mock memory loads the profile and latest trip, scales party size and budget, and honors departure limits.
+- The trip scheduler ticks only from main, uses idempotent weather nudges, and confirms indoor replacements before cancelling outdoor holds.
+- Successful saga confirmation marks session holds confirmed so downstream scheduling sees the persisted booking state.
 - seed:demo creates synthetic history; reset clears workspace and configured data directories.
 open_issues:

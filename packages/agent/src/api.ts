@@ -5,6 +5,7 @@ import { ScenarioProvider } from './llm/mock.js';
 import { createRegistry, type ServerName } from './mcp/registry.js';
 import { runLoop, type AgentSession, type LoopEvent } from './loop.js';
 import { confirmPlan } from './saga.js';
+import { TripScheduler } from './scheduler.js';
 
 const allowedOrigin = 'http://localhost:5173';
 
@@ -28,11 +29,18 @@ function newSession(id: string, asOf: string): AgentSession {
       holds: new Map(),
       plans: new Map(),
       cards: new Map(),
+      swaps: new Map(),
     },
   };
 }
 
-export async function createAgentApp(options: AgentAppOptions = {}): Promise<{ app: express.Express; close: () => Promise<void> }> {
+export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
+  app: express.Express;
+  tick: () => Promise<Map<string, LoopEvent[]>>;
+  startScheduler: () => void;
+  stop: () => void;
+  close: () => Promise<void>;
+}> {
   const llm = process.env.VELOX_LLM ?? 'mock';
   const provider = options.provider ?? (llm === 'bedrock'
     ? new BedrockProvider()
@@ -49,6 +57,11 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{ a
   }
   const sessions = new Map<string, AgentSession>();
   const defaultAsOf = options.asOf ?? new Date().toISOString();
+  const scheduler = new TripScheduler(() => [...sessions.values()], registry, provider, defaultAsOf);
+  const pendingEvents = new Map<string, LoopEvent[]>();
+  const publish = (sessionId: string, events: LoopEvent[]) => {
+    pendingEvents.set(sessionId, [...(pendingEvents.get(sessionId) ?? []), ...events]);
+  };
   const app = express();
   app.use(express.json());
   app.use((req: Request, res: Response, next) => {
@@ -72,6 +85,66 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{ a
 
   app.get('/api/health', (_req, res) => {
     res.status(200).json({ ok: true });
+  });
+
+  app.get('/api/clock', (_req, res) => {
+    res.status(200).json({ now: scheduler.now() });
+  });
+
+  app.post('/api/clock', async (req, res) => {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as { to?: unknown; plus_hours?: unknown; preset?: unknown }
+      : {};
+    try {
+      let target: string;
+      if (body.preset === 'trip_day' && body.to === undefined && body.plus_hours === undefined) {
+        const response = await registry.invoke('vault__list_trips', { limit: 50 }, scheduler.now());
+        const trips = response.trips;
+        if (!Array.isArray(trips) || !trips.length || !trips[0] || typeof trips[0] !== 'object') {
+          res.status(409).json({ error: 'No confirmed trip is available for the trip_day preset' });
+          return;
+        }
+        const start = (trips[0] as Record<string, unknown>).start;
+        if (typeof start !== 'string' || !Number.isFinite(Date.parse(`${start}T00:00:00Z`))) {
+          throw new Error('Vault returned an invalid trip start date');
+        }
+        const tripDate = new Date(`${start}T00:00:00Z`);
+        const daysSinceFriday = (tripDate.getUTCDay() - 5 + 7) % 7;
+        tripDate.setUTCDate(tripDate.getUTCDate() - daysSinceFriday);
+        target = `${tripDate.toISOString().slice(0, 10)}T08:00:00.000Z`;
+      } else if (body.to !== undefined && body.plus_hours === undefined && body.preset === undefined && typeof body.to === 'string') {
+        target = body.to;
+      } else if (body.plus_hours !== undefined && body.to === undefined && body.preset === undefined &&
+        typeof body.plus_hours === 'number' && Number.isFinite(body.plus_hours)) {
+        target = new Date(Date.parse(scheduler.now()) + body.plus_hours * 3_600_000).toISOString();
+      } else {
+        res.status(400).json({ error: 'Provide exactly one of to, plus_hours, or preset: trip_day' });
+        return;
+      }
+      scheduler.setNow(target);
+      for (const session of sessions.values()) publish(session.id, [{ type: 'clock', now: scheduler.now() }]);
+      const scheduled = await scheduler.tick();
+      for (const [sessionId, events] of scheduled) publish(sessionId, events);
+      res.status(200).json({ now: scheduler.now() });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : 'Could not set the virtual clock' });
+    }
+  });
+
+  app.get('/api/events', (req, res) => {
+    const sessionId = req.query.session_id;
+    if (typeof sessionId !== 'string' || !sessionId) {
+      res.status(400).json({ error: 'session_id is required' });
+      return;
+    }
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    const events = pendingEvents.get(sessionId) ?? [];
+    for (const event of events) writeSse(res, event);
+    pendingEvents.delete(sessionId);
+    writeSse(res, { type: 'done' });
+    res.end();
   });
 
   app.post('/api/reset', async (req, res) => {
@@ -141,6 +214,33 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{ a
     res.end();
   });
 
+  app.post('/api/accept', async (req, res) => {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as { session_id?: unknown; plan_id?: unknown }
+      : {};
+    if (typeof body.session_id !== 'string' || typeof body.plan_id !== 'string') {
+      res.status(400).json({ error: 'session_id and plan_id are required' });
+      return;
+    }
+    const session = sessions.get(body.session_id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    try {
+      for (const event of await confirmPlan(session, body.plan_id, provider, registry)) writeSse(res, event);
+    } catch (error) {
+      writeSse(res, { type: 'error', message: error instanceof Error ? error.message : String(error) });
+    }
+    writeSse(res, { type: 'done' });
+    res.end();
+  });
+
   app.post('/api/chat', async (req, res) => {
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
       ? req.body as { session_id?: unknown; text?: unknown }
@@ -171,7 +271,12 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{ a
 
   return {
     app,
+    tick: scheduler.tick.bind(scheduler),
+    startScheduler: () => scheduler.start(publish),
+    stop: () => scheduler.stop(),
     async close() {
+      scheduler.stop();
+      pendingEvents.clear();
       sessions.clear();
       try {
         await registry.close();

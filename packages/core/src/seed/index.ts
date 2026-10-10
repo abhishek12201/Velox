@@ -225,8 +225,12 @@ export function forecast(area: Area, date: string, asOf: string): ForecastResult
 
   let rain: boolean;
   let chance: number;
+  const fridayStart = new Date(parsedDate.getTime() - 86400000);
 
-  if (isSaturday && daysAhead >= 3) {
+  if (isSaturday && parsedAsOf.getTime() >= fridayStart.getTime()) {
+    rain = true;
+    chance = 82;
+  } else if (isSaturday && daysAhead >= 3) {
     rain = false;
     chance = 18;
   } else if (isSaturday && daysAhead <= 1) {

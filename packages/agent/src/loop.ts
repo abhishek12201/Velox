@@ -13,7 +13,7 @@ export interface AgentSession {
 }
 
 export interface LoopEvent {
-  type: 'say' | 'call' | 'result' | 'card' | 'chip' | 'error' | 'recovery';
+  type: 'say' | 'call' | 'result' | 'card' | 'chip' | 'error' | 'recovery' | 'clock' | 'nudge';
   [key: string]: unknown;
 }
 
@@ -71,7 +71,7 @@ function compactResult(result: Record<string, unknown>): Record<string, unknown>
     if (!entry || typeof entry !== 'object') return entry;
     const offer = entry as Record<string, unknown>;
     const compact: Record<string, unknown> = {};
-    for (const key of ['id', 'name', 'flight_no', 'price_per_pax', 'price_per_night', 'price_per_head', 'depart', 'arrive', 'area', 'tags']) {
+    for (const key of ['id', 'name', 'kind', 'flight_no', 'price_per_pax', 'price_per_night', 'price_per_head', 'depart', 'arrive', 'area', 'outdoor', 'tags']) {
       if (offer[key] !== undefined) compact[key] = offer[key];
     }
     return compact;

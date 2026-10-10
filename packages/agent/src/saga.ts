@@ -115,6 +115,56 @@ async function reholdSamePlan(
   return { planId: (nextPlan as { plan_id: string }).plan_id, card };
 }
 
+async function acceptSwap(session: AgentSession, planId: string, registry: Registry): Promise<LoopEvent[]> {
+  const plan = session.ledger.plans.get(planId);
+  const swap = session.ledger.swaps.get(planId);
+  const replacement = plan?.hold_ids.length === 1 ? session.ledger.holds.get(plan.hold_ids[0] ?? '') : undefined;
+  const oldHold = swap ? session.ledger.holds.get(swap.oldHoldId) : undefined;
+  const tripCard = swap ? itineraryCard(session, swap.tripPlanId) : undefined;
+  if (!plan || plan.kind !== 'swap' || !swap || !replacement || !oldHold || !tripCard || replacement.state !== 'held' || oldHold.state !== 'confirmed') {
+    throw new Error('The requested activity swap is not available');
+  }
+  const token = signConfirm(process.env.VELOX_CONFIRM_SECRET ?? 'dev-secret', replacement.hold_id, planId);
+  const confirmation = await registry.invokeApp('local__confirm_table', {
+    hold_id: replacement.hold_id,
+    token,
+    plan_id: planId,
+    idem_key: `${planId}:${replacement.hold_id}`,
+  }, session.asOf);
+  const failure = structuredError(confirmation);
+  if (failure) {
+    const released = await registry.invoke('local__release_hold', { hold_id: replacement.hold_id }, session.asOf);
+    session.ledger.holds.set(replacement.hold_id, { ...replacement, state: 'released' });
+    return [
+      { type: 'recovery', step: 1, detail: `Indoor activity confirmation failed: ${failure}. The original activity remains confirmed.` },
+      { type: 'error', message: `Activity swap was rolled back: ${failure}; replacement state ${String(released.state ?? 'released')}.` },
+    ];
+  }
+  const cancellation = await registry.invokeApp('local__cancel_booking', { hold_id: oldHold.hold_id }, session.asOf);
+  if (structuredError(cancellation)) {
+    const rollback = await registry.invokeApp('local__cancel_booking', { hold_id: replacement.hold_id }, session.asOf);
+    session.ledger.holds.set(replacement.hold_id, { ...replacement, state: 'cancelled' });
+    return [
+      { type: 'recovery', step: 1, detail: 'Could not cancel the outdoor activity after confirming its replacement; cancelled the replacement.' },
+      { type: 'error', message: `Activity swap was rolled back: ${structuredError(cancellation)} (${String(rollback.state ?? 'cancelled')}).` },
+    ];
+  }
+  session.ledger.holds.set(replacement.hold_id, { ...replacement, state: 'confirmed' });
+  session.ledger.holds.set(oldHold.hold_id, { ...oldHold, state: 'cancelled' });
+  const newOffer = session.ledger.offers.get(replacement.offer_id);
+  const updatedCard = {
+    ...tripCard,
+    days: tripCard.days.map((day) => ({
+      ...day,
+      items: day.items.map((item) => item.hold_id === oldHold.hold_id
+        ? { ...item, title: String(newOffer?.name ?? replacement.offer_id), amount: replacement.amount, hold_id: replacement.hold_id, status: 'confirmed' }
+        : item),
+    })),
+  };
+  session.ledger.cards.set(swap.tripPlanId, updatedCard);
+  return [{ type: 'card', card: updatedCard }];
+}
+
 export async function confirmPlan(
   session: AgentSession,
   planId: string,
@@ -122,6 +172,7 @@ export async function confirmPlan(
   registry: Registry,
 ): Promise<LoopEvent[]> {
   let plan = session.ledger.plans.get(planId);
+  if (plan?.kind === 'swap') return acceptSwap(session, planId, registry);
   const initialCard = itineraryCard(session, planId);
   if (!plan || !initialCard) throw new Error('The requested itinerary is not available in this session');
   let card = initialCard;
@@ -151,6 +202,7 @@ export async function confirmPlan(
       if (item.status === 'fulfilled') {
         return [{ ...item.value, failureReason: undefined }];
       }
+
       const failureReason = item.reason instanceof Error ? item.reason.message : String(item.reason);
       return [{
         hold,
@@ -174,6 +226,9 @@ export async function confirmPlan(
         }),
       }, session.asOf);
       if (structuredError(save)) throw new Error(`Could not save confirmed itinerary: ${structuredError(save)}`);
+      for (const hold of holds) {
+        if (hold) session.ledger.holds.set(hold.hold_id, { ...hold, state: 'confirmed' });
+      }
       card = updateCardStatus(card, 'confirmed');
       session.ledger.cards.set(planId, card);
       events.push({ type: 'card', card });

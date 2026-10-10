@@ -115,6 +115,37 @@ export class ScenarioProvider implements LlmProvider {
     const userTexts = input.messages.filter((message) => message.role === 'user').map((message) => message.content);
     const text = lastUserText(input.messages);
     const responses = toolResponses(input.messages);
+    const swapRequestText = userTexts.find((userText) => userText.startsWith('__S6_INDOOR_SWAP__'));
+    if (swapRequestText) {
+      const request: unknown = JSON.parse(swapRequestText.slice('__S6_INDOOR_SWAP__'.length));
+      if (!request || typeof request !== 'object') throw new Error('S6 mock request is invalid');
+      const swap = request as { area?: unknown; day?: unknown; maxUnit?: unknown; qty?: unknown };
+      if (
+        typeof swap.area !== 'string' || typeof swap.day !== 'string' ||
+        typeof swap.maxUnit !== 'number' || typeof swap.qty !== 'number'
+      ) throw new Error('S6 mock request is incomplete');
+      const search = responses.find((response) => response.name === 'local__search_places');
+      if (!search) {
+        return result([inputFor('local__search_places', input.tools, {
+          area: swap.area,
+          kind: 'activity',
+          outdoor: false,
+          max_per_head: swap.maxUnit,
+        }, 's6-indoor-search')]);
+      }
+      const held = responses.find((response) => response.name === 'local__hold_table' && response.value.state === 'held');
+      if (held) return result([{ type: 'text', text: 'The indoor activity is ready as a weather backup.' }], 1);
+      const offers = offerList(responses, (response) => response.name === 'local__search_places')
+        .sort((left, right) => Number(left.price_per_head) - Number(right.price_per_head));
+      const offer = offers[0];
+      if (!offer) return result([{ type: 'text', text: 'No suitable indoor alternative is available.' }], 1);
+      return result([inputFor('local__hold_table', input.tools, {
+        offer_id: offer.id,
+        when: `${swap.day}T10:00:00.000Z`,
+        party: swap.qty,
+        idem_key: `s6-indoor-${swap.day}-${offer.id}`,
+      }, 's6-indoor-hold')]);
+    }
     if (userTexts.some((userText) => /S8|unauthorized confirmation/i.test(userText))) {
       const refusal = toolResponses(input.messages).find((response) =>
         response.name === 'air__confirm_flight' && typeof response.value.message === 'string',
@@ -195,8 +226,8 @@ export class ScenarioProvider implements LlmProvider {
       : matched.budget * party;
     const budget = memoryScenario ? previousBudget : matched.budget;
     const searchSpecifications = [
-      { name: 'air__search_flights', args: { origin: 'BLR', destination: 'GOX', date: dates.departure, pax: party, ...(avoidDepartureBefore ? { depart_after: '07:00' } : {}) } },
-      { name: 'air__search_flights', args: { origin: 'GOX', destination: 'BLR', date: dates.returnDate, pax: party, ...(avoidDepartureBefore ? { depart_after: '07:00' } : {}) } },
+      { name: 'air__search_flights', args: { origin: 'BLR', destination: 'GOX', date: dates.departure, pax: party, ...(avoidDepartureBefore ? { depart_after: '07:00' } : matched.id === 'goa-rain' ? { depart_after: '08:00' } : {}) } },
+      { name: 'air__search_flights', args: { origin: 'GOX', destination: 'BLR', date: dates.returnDate, pax: party, ...(avoidDepartureBefore ? { depart_after: '07:00' } : matched.id === 'goa-rain' ? { depart_after: '08:00' } : {}) } },
       { name: 'stay__search_stays', args: { area: 'north', checkin: dates.departure, checkout: dates.checkout, guests: party } },
       { name: 'local__search_places', args: { area: 'north', kind: 'food' } },
       { name: 'local__search_places', args: { area: 'north', kind: 'activity' } },
@@ -219,13 +250,16 @@ export class ScenarioProvider implements LlmProvider {
     const premium = 'premiumFood' in plan;
     const preferredFoodId = premium ? plan.premiumFood.id : plan.cheapFood.id;
     const preferredActivityId = premium ? plan.premiumActivity.id : plan.cheapActivity.id;
+    const outdoorActivities = matched.id === 'goa-rain'
+      ? activities.filter((offer) => offer.outdoor === true)
+      : activities;
     const selected = [
       pickPrice(outbound, 'price_per_pax', expensive, plan.flight.id),
       pickPrice(returning, 'price_per_pax', expensive),
       pickPrice(stays, 'price_per_night', expensive, plan.stay.id),
       pickPrice(foods, 'price_per_head', expensive, preferredFoodId),
       pickPrice(foods.filter((offer) => offer.id !== preferredFoodId), 'price_per_head', expensive),
-      pickPrice(activities, 'price_per_head', expensive, preferredActivityId),
+      pickPrice(outdoorActivities, 'price_per_head', expensive, preferredActivityId),
     ];
     if (selected.some((offer) => !offer)) return result([{ type: 'text', text: 'I could not find all trip options.' }], 1);
 
