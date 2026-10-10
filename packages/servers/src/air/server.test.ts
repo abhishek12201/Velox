@@ -1,13 +1,17 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import type { Server } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createAirServer } from './server.js';
 import { createServeApp } from '../kit/serve.js';
 import { signConfirm } from '@velox/core';
 
-let serverHandle: { close: (callback?: () => void) => void } | undefined;
+const testAsOf = '2026-06-01T00:00:00.000Z';
+
+let serverHandle: Server | undefined;
 let url: string;
 let airServer: ReturnType<typeof createAirServer>;
+const clients = new Set<Client>();
 
 function waitForListening(server: { address: () => any }): Promise<void> {
   return new Promise((resolve) => {
@@ -25,7 +29,7 @@ function waitForListening(server: { address: () => any }): Promise<void> {
 }
 
 beforeEach(async () => {
-  airServer = createAirServer();
+  airServer = createAirServer({ dbPath: ':memory:' });
   const { server } = createServeApp(() => airServer as any, { serverName: 'air', port: 0 });
   serverHandle = server;
   await waitForListening(server);
@@ -35,13 +39,25 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  serverHandle?.close();
+  const results = await Promise.allSettled([...clients].map((client) => client.close()));
+  clients.clear();
+  const server = serverHandle;
   serverHandle = undefined;
+  if (server) {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+  const failures = results.filter((result) => result.status === 'rejected');
+  if (failures.length > 0) {
+    throw new AggregateError(failures.map((result) => result.status === 'rejected' ? result.reason : undefined), 'Failed to close MCP test clients');
+  }
 });
 
 async function connect() {
   const transport = new StreamableHTTPClientTransport(new URL(url));
   const client = new Client({ name: 'test-client', version: '1.0.0' }, { capabilities: {} });
+  clients.add(client);
   await client.connect(transport);
   return client;
 }
@@ -55,26 +71,24 @@ test('initialization negotiates protocol and exposes app-only tools', async () =
   expect(confirmTool?._meta?.['velox/audience']).toBe('app');
   const cancelTool = result.tools.find((tool) => tool.name === 'cancel_booking');
   expect(cancelTool?._meta?.['velox/audience']).toBe('app');
-  await client.close();
 });
 
 test('search -> hold -> release -> expiry works', async () => {
   const client = await connect();
-  const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
+  const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1, as_of: testAsOf } });
   const offer = (search.structuredContent as { offers: Array<{ id: string; price_per_pax: number }> }).offers[0];
-  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'hold-key' } });
+  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'hold-key', as_of: testAsOf } });
   const holdId = (hold as any).hold_id ?? (hold.structuredContent as { hold_id: string } | undefined)?.hold_id;
   await client.callTool({ name: 'release_hold', arguments: { hold_id: holdId } });
-  const after = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
+  const after = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1, as_of: testAsOf } });
   expect(after.structuredContent).toBeTruthy();
-  await client.close();
 });
 
 test('confirm without token or with wrong token is forbidden; valid token confirms', async () => {
   const client = await connect();
-  const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
+  const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1, as_of: testAsOf } });
   const offer = (search.structuredContent as { offers: Array<{ id: string; price_per_pax: number }> }).offers[0];
-  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'confirm-key' } });
+  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'confirm-key', as_of: testAsOf } });
   const holdId = (hold as any).hold_id ?? (hold.structuredContent as { hold_id: string } | undefined)?.hold_id;
   const wrong = await client.callTool({ name: 'confirm_flight', arguments: { hold_id: holdId, token: 'bad', plan_id: 'plan_1' } });
   expect((wrong as any).isError).toBe(true);
@@ -82,14 +96,13 @@ test('confirm without token or with wrong token is forbidden; valid token confir
   const valid = await client.callTool({ name: 'confirm_flight', arguments: { hold_id: holdId, token: validToken, plan_id: 'plan_1' } });
   const validState = (valid as any).state ?? (valid.structuredContent as { state: string } | undefined)?.state;
   expect(validState).toBe('confirmed');
-  await client.close();
 });
 
 test('cancel booking is idempotent and chaos triggers sold out once', async () => {
   const client = await connect();
-  const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
+  const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1, as_of: testAsOf } });
   const offer = (search.structuredContent as { offers: Array<{ id: string; price_per_pax: number }> }).offers[0];
-  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'cancel-key' } });
+  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'cancel-key', as_of: testAsOf } });
   const holdId = (hold as any).hold_id ?? (hold.structuredContent as { hold_id: string } | undefined)?.hold_id;
   const validToken = signConfirm('dev-secret', holdId, 'plan_2');
   const chaos = await fetch('http://127.0.0.1:' + (serverHandle as any).address().port + '/admin/chaos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: 'SOLD_OUT', once: true }) });
@@ -99,23 +112,22 @@ test('cancel booking is idempotent and chaos triggers sold out once', async () =
   const cancel = await client.callTool({ name: 'cancel_booking', arguments: { hold_id: holdId } });
   const cancelState = (cancel as any).state ?? (cancel.structuredContent as { state: string } | undefined)?.state;
   expect(cancelState).toBe('cancelled');
-  await client.close();
 });
 
 test('hold and confirm idempotency return the original results without duplicate holds', async () => {
   const client = await connect();
-  const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
+  const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1, as_of: testAsOf } });
   const offer = (search.structuredContent as { offers: Array<{ id: string }> }).offers[0];
   const originalHold = await client.callTool({
     name: 'hold_flight',
-    arguments: { offer_id: offer.id, idem_key: 'repeat-hold-key' },
+    arguments: { offer_id: offer.id, idem_key: 'repeat-hold-key', as_of: testAsOf },
   });
   const holdId = (originalHold.structuredContent as { hold_id: string }).hold_id;
   expect(airServer.store.countHolds()).toBe(1);
 
   const repeatedHold = await client.callTool({
     name: 'hold_flight',
-    arguments: { offer_id: offer.id, idem_key: 'repeat-hold-key' },
+    arguments: { offer_id: offer.id, idem_key: 'repeat-hold-key', as_of: testAsOf },
   });
   expect((repeatedHold.structuredContent as { hold_id: string }).hold_id).toBe(holdId);
   expect(airServer.store.countHolds()).toBe(1);
@@ -130,7 +142,6 @@ test('hold and confirm idempotency return the original results without duplicate
     arguments: { hold_id: holdId, token, plan_id: 'plan_idem', idem_key: 'repeat-confirm-key' },
   });
   expect(repeatedConfirm.structuredContent).toEqual(originalConfirm.structuredContent);
-  await client.close();
 });
 
 test('rejects MCP requests with a foreign Origin', async () => {

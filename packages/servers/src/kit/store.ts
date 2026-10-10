@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
 
 export type HoldState = 'held' | 'confirmed' | 'released' | 'expired' | 'cancelled';
@@ -26,10 +26,10 @@ export class HoldStore {
   private readonly ttlSeconds: number;
   private chaos: ChaosState = { active: false, code: 'SOLD_OUT', once: true };
 
-  constructor(serverName: string, dataDir = process.env.VELOX_DATA_DIR ?? join(process.cwd(), 'data', `${serverName}-${randomUUID().slice(0, 8)}`)) {
-    const dir = dataDir ?? join(process.cwd(), 'data', `${serverName}-${randomUUID().slice(0, 8)}`);
-    mkdirSync(dir, { recursive: true });
-    const dbPath = join(dir, `${serverName}.db`);
+  constructor(serverName: string, dbPath = join(process.env.VELOX_DATA_DIR ?? join(process.cwd(), 'data', `${serverName}-${randomUUID().slice(0, 8)}`), `${serverName}.db`)) {
+    if (dbPath !== ':memory:') {
+      mkdirSync(dirname(dbPath), { recursive: true });
+    }
     this.db = new Database(dbPath);
     this.ttlSeconds = Number(process.env.VELOX_HOLD_TTL_SEC ?? 600);
     this.db.exec(`

@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import { join } from 'node:path';
 import * as z from 'zod/v4';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -29,8 +28,9 @@ function stableHash(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
 
-export function createAirServer(basePort = Number(process.env.PORT ?? 0), dataDir = process.env.VELOX_DATA_DIR ?? join(process.cwd(), 'data', `air-${crypto.randomUUID().slice(0, 8)}`)) {
-  const store = new HoldStore('air', dataDir);
+export function createAirServer(options: { dbPath?: string; basePort?: number } = {}) {
+  const basePort = options.basePort ?? Number(process.env.PORT ?? 0);
+  const store = new HoldStore('air', options.dbPath);
   const server = new McpServer({
     name: 'air',
     version: '1.0.0',
