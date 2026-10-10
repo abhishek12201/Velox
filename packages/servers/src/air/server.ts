@@ -76,7 +76,7 @@ export function createAirServer(basePort = Number(process.env.PORT ?? 0), dataDi
     inputSchema: {
       offer_id: z.string().describe('Flight offer id'),
       pax: z.number().int().gte(1).default(1),
-      idempotency_key: z.string().optional(),
+      idem_key: z.string().optional(),
       as_of: z.string().optional(),
     },
     outputSchema: z.object({
@@ -93,8 +93,8 @@ export function createAirServer(basePort = Number(process.env.PORT ?? 0), dataDi
       idempotentHint: true,
     },
     _meta: { 'velox/audience': 'llm' },
-  }, async ({ offer_id, pax = 1, idempotency_key, as_of }: any): Promise<any> => {
-    const idemKey = idempotency_key ?? `flight:${offer_id}:${pax}:${as_of ?? Date.now()}`;
+  }, async ({ offer_id, pax = 1, idem_key, as_of }: any): Promise<any> => {
+    const idemKey = idem_key ?? `flight:${offer_id}:${pax}:${as_of ?? Date.now()}`;
     const cached = store.getIdempotent<Record<string, unknown>>(idemKey);
     if (cached) {
       return {

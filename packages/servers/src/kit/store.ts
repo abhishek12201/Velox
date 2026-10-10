@@ -99,6 +99,11 @@ export class HoldStore {
     return JSON.parse(row.value) as T;
   }
 
+  countHolds(): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM holds`).get() as { count: number };
+    return row.count;
+  }
+
   createHold(holdId: string, server: string, offerId: string, amount: number, qty: number): HoldRecord {
     this.expireHeldRows();
     const expiresAt = new Date(Date.now() + this.ttlSeconds * 1000).toISOString();

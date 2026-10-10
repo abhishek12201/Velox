@@ -7,6 +7,7 @@ import { signConfirm } from '@velox/core';
 
 let serverHandle: { close: (callback?: () => void) => void } | undefined;
 let url: string;
+let airServer: ReturnType<typeof createAirServer>;
 
 function waitForListening(server: { address: () => any }): Promise<void> {
   return new Promise((resolve) => {
@@ -24,8 +25,8 @@ function waitForListening(server: { address: () => any }): Promise<void> {
 }
 
 beforeEach(async () => {
-  const air = createAirServer();
-  const { server } = createServeApp(() => air as any, { serverName: 'air', port: 0 });
+  airServer = createAirServer();
+  const { server } = createServeApp(() => airServer as any, { serverName: 'air', port: 0 });
   serverHandle = server;
   await waitForListening(server);
   const address = server.address();
@@ -61,7 +62,7 @@ test('search -> hold -> release -> expiry works', async () => {
   const client = await connect();
   const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
   const offer = (search.structuredContent as { offers: Array<{ id: string; price_per_pax: number }> }).offers[0];
-  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idempotency_key: 'hold-key' } });
+  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'hold-key' } });
   const holdId = (hold as any).hold_id ?? (hold.structuredContent as { hold_id: string } | undefined)?.hold_id;
   await client.callTool({ name: 'release_hold', arguments: { hold_id: holdId } });
   const after = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
@@ -73,7 +74,7 @@ test('confirm without token or with wrong token is forbidden; valid token confir
   const client = await connect();
   const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
   const offer = (search.structuredContent as { offers: Array<{ id: string; price_per_pax: number }> }).offers[0];
-  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idempotency_key: 'confirm-key' } });
+  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'confirm-key' } });
   const holdId = (hold as any).hold_id ?? (hold.structuredContent as { hold_id: string } | undefined)?.hold_id;
   const wrong = await client.callTool({ name: 'confirm_flight', arguments: { hold_id: holdId, token: 'bad', plan_id: 'plan_1' } });
   expect((wrong as any).isError).toBe(true);
@@ -88,7 +89,7 @@ test('cancel booking is idempotent and chaos triggers sold out once', async () =
   const client = await connect();
   const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
   const offer = (search.structuredContent as { offers: Array<{ id: string; price_per_pax: number }> }).offers[0];
-  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idempotency_key: 'cancel-key' } });
+  const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'cancel-key' } });
   const holdId = (hold as any).hold_id ?? (hold.structuredContent as { hold_id: string } | undefined)?.hold_id;
   const validToken = signConfirm('dev-secret', holdId, 'plan_2');
   const chaos = await fetch('http://127.0.0.1:' + (serverHandle as any).address().port + '/admin/chaos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: 'SOLD_OUT', once: true }) });
@@ -99,4 +100,47 @@ test('cancel booking is idempotent and chaos triggers sold out once', async () =
   const cancelState = (cancel as any).state ?? (cancel.structuredContent as { state: string } | undefined)?.state;
   expect(cancelState).toBe('cancelled');
   await client.close();
+});
+
+test('hold and confirm idempotency return the original results without duplicate holds', async () => {
+  const client = await connect();
+  const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1 } });
+  const offer = (search.structuredContent as { offers: Array<{ id: string }> }).offers[0];
+  const originalHold = await client.callTool({
+    name: 'hold_flight',
+    arguments: { offer_id: offer.id, idem_key: 'repeat-hold-key' },
+  });
+  const holdId = (originalHold.structuredContent as { hold_id: string }).hold_id;
+  expect(airServer.store.countHolds()).toBe(1);
+
+  const repeatedHold = await client.callTool({
+    name: 'hold_flight',
+    arguments: { offer_id: offer.id, idem_key: 'repeat-hold-key' },
+  });
+  expect((repeatedHold.structuredContent as { hold_id: string }).hold_id).toBe(holdId);
+  expect(airServer.store.countHolds()).toBe(1);
+
+  const token = signConfirm('dev-secret', holdId, 'plan_idem');
+  const originalConfirm = await client.callTool({
+    name: 'confirm_flight',
+    arguments: { hold_id: holdId, token, plan_id: 'plan_idem', idem_key: 'repeat-confirm-key' },
+  });
+  const repeatedConfirm = await client.callTool({
+    name: 'confirm_flight',
+    arguments: { hold_id: holdId, token, plan_id: 'plan_idem', idem_key: 'repeat-confirm-key' },
+  });
+  expect(repeatedConfirm.structuredContent).toEqual(originalConfirm.structuredContent);
+  await client.close();
+});
+
+test('rejects MCP requests with a foreign Origin', async () => {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: 'https://evil.example',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+  });
+  expect(response.status).toBe(403);
 });
