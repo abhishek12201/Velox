@@ -20,7 +20,7 @@ const stayOutputSchema = z.object({
 });
 
 export function createStayServer(options: { dbPath?: string; basePort?: number } = {}) {
-  const basePort = options.basePort ?? Number(process.env.STAY_PORT ?? process.env.PORT ?? 7102);
+  const basePort = options.basePort ?? Number(process.env.STAY_PORT ?? process.env.PORT ?? 0);
   const store = new HoldStore('stay', options.dbPath);
   const server = new McpServer({ name: 'stay', version: '1.0.0' }, { capabilities: {} });
 

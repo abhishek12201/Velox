@@ -10,7 +10,7 @@ const kinds = ['food', 'activity'] as const;
 const conditionSchema = z.enum(['sunny', 'cloudy', 'rain']);
 
 export function createLocalServer(options: { dbPath?: string; basePort?: number } = {}) {
-  const basePort = options.basePort ?? Number(process.env.LOCAL_PORT ?? process.env.PORT ?? 7103);
+  const basePort = options.basePort ?? Number(process.env.LOCAL_PORT ?? process.env.PORT ?? 0);
   const store = new HoldStore('local', options.dbPath);
   const server = new McpServer({ name: 'local', version: '1.0.0' }, { capabilities: {} });
 

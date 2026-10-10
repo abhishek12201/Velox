@@ -29,7 +29,7 @@ function stableHash(value: string): string {
 }
 
 export function createAirServer(options: { dbPath?: string; basePort?: number } = {}) {
-  const basePort = options.basePort ?? Number(process.env.PORT ?? 0);
+  const basePort = options.basePort ?? Number(process.env.AIR_PORT ?? process.env.PORT ?? 0);
   const store = new HoldStore('air', options.dbPath);
   const server = new McpServer({
     name: 'air',

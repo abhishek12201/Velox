@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "check": "node ./src/index.ts"
+    "build": "tsc -p tsconfig.json",
+    "check": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.11.4"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

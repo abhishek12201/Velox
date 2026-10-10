@@ -1,5 +1,5 @@
 # STATE (opencode keeps this <=40 lines; replace stale lines, no history)
-done: P3
+done: P4
 next: none
 license: Apache-2.0 (file added by human)
 llm_default: mock
@@ -10,5 +10,6 @@ decisions:
 - Stateful Streamable HTTP sessions are initialized by a POST /mcp initialize call, then reused by session ID.
 - Holds expire lazily in SQLite; foreign-origin and host checks are enforced at the Express boundary.
 - Each capability server uses its own SQLite hold store; tests use fresh in-memory databases and fixed as_of values.
-- Air, stay, and local server ports can be set independently with AIR_PORT, STAY_PORT, and LOCAL_PORT.
+- Air, stay, local, and vault server ports can be set independently with AIR_PORT, STAY_PORT, LOCAL_PORT, and VAULT_PORT.
+- Vault stores stated/inferred profile preferences and saved trips in its own SQLite database; veloxcheck is an independent MCP SDK CLI.
 open_issues:

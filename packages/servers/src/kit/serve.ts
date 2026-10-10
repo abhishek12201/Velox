@@ -17,6 +17,7 @@ interface SessionRecord {
   open: number;
   lastActive: number;
   store?: ChaosStore;
+  closeServer?: () => Promise<void>;
 }
 
 function isLocalHost(value?: string): boolean {
@@ -86,14 +87,16 @@ export function createServeApp(createServer: () => { connect: (transport: Stream
 
       if (!sessionId && isInitializeRequest(req.body)) {
         const eventStore = new InMemoryEventStore();
+        const server = createServer();
+        let closePromise: Promise<void> | undefined;
+        const closeServer = () => closePromise ??= server.close();
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           eventStore,
           onsessioninitialized: (sid) => {
-            sessions.set(sid, { transport, open: 0, lastActive: Date.now(), store: undefined });
+            sessions.set(sid, { transport, open: 0, lastActive: Date.now(), store: undefined, closeServer });
           },
         });
-        const server = createServer();
         if (server.store) {
           activeChaosTarget = server.store;
         }
@@ -110,6 +113,9 @@ export function createServeApp(createServer: () => { connect: (transport: Stream
           if (sid && sessions.has(sid)) {
             sessions.delete(sid);
           }
+          void closeServer().catch((error: unknown) => {
+            console.error('MCP server close failed', error);
+          });
         };
         await transport.handleRequest(req, res, req.body);
         return;
@@ -158,6 +164,7 @@ export function createServeApp(createServer: () => { connect: (transport: Stream
       return;
     }
     await session.transport.close();
+    await session.closeServer?.();
     sessions.delete(String(sessionId));
     res.status(200).json({ ok: true });
   });
