@@ -11,6 +11,7 @@ Counts toward a judging bonus (up to 10%). Log REAL friction only: wrong/missing
 
 ## Feedback lines (one per tool/SDK used; format: tool | used for | worked | needs work | onboarding 1-5 | build again y/n + why)
 - @modelcontextprotocol/sdk | stateful Streamable HTTP session setup and init lifecycle | yes | some resolver friction | 4 | y; docs were correct but the import path still needed validation in practice
+- @modelcontextprotocol/sdk | connect four Streamable HTTP clients, enumerate/call tools, and inject as_of | yes | no major friction | 4 | y; consistent MCP client/server lifecycle
 
 ## Feature requests (format: request | why it matters | critical|important|nice-to-have)
 
