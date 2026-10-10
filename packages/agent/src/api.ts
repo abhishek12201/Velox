@@ -1,5 +1,6 @@
 import express, { type Request, type Response } from 'express';
 import type { LlmProvider } from './llm/types.js';
+import { BedrockProvider } from './llm/bedrock.js';
 import { ScenarioProvider } from './llm/mock.js';
 import { createRegistry, type ServerName } from './mcp/registry.js';
 import { runLoop, type AgentSession, type LoopEvent } from './loop.js';
@@ -30,8 +31,20 @@ function newSession(id: string, asOf: string): AgentSession {
 }
 
 export async function createAgentApp(options: AgentAppOptions = {}): Promise<{ app: express.Express; close: () => Promise<void> }> {
-  const registry = await createRegistry(options.serverUrls);
-  const provider = options.provider ?? new ScenarioProvider();
+  const llm = process.env.VELOX_LLM ?? 'mock';
+  const provider = options.provider ?? (llm === 'bedrock'
+    ? new BedrockProvider()
+    : llm === 'mock'
+      ? new ScenarioProvider()
+      : undefined);
+  if (!provider) throw new Error(`Unsupported VELOX_LLM value: ${llm}`);
+  let registry;
+  try {
+    registry = await createRegistry(options.serverUrls);
+  } catch (error) {
+    if (provider instanceof BedrockProvider) provider.close();
+    throw error;
+  }
   const sessions = new Map<string, AgentSession>();
   const defaultAsOf = options.asOf ?? new Date().toISOString();
   const app = express();
@@ -108,7 +121,11 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{ a
     app,
     async close() {
       sessions.clear();
-      await registry.close();
+      try {
+        await registry.close();
+      } finally {
+        if (provider instanceof BedrockProvider) provider.close();
+      }
     },
   };
 }
