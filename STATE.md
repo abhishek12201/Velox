@@ -1,5 +1,5 @@
 # STATE (opencode keeps this <=40 lines; replace stale lines, no history)
-done: P0
+done: P1
 next: none
 license: Apache-2.0 (file added by human)
 llm_default: mock
