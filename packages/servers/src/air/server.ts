@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { flightsFor, type FlightOffer } from '@velox/core';
 import { HoldStore } from '../kit/store.js';
-import { makeError } from '../kit/errors.js';
+import { makeError, makeStructuredToolError } from '../kit/errors.js';
 import { signConfirm, verifyConfirm } from '@velox/core';
 
 export const MCP_PROTOCOL_VERSION = '2025-11-25';
@@ -102,7 +102,10 @@ export function createAirServer(options: { dbPath?: string; basePort?: number } 
         structuredContent: cached,
       };
     }
-    const allFlights = flightsFor('BLR', 'GOX', '2026-06-30', as_of ?? new Date().toISOString());
+    const flightId = /^flt_(BLR|GOX)_(BLR|GOX)_(\d{4}-\d{2}-\d{2})_\d+$/.exec(offer_id);
+    const allFlights = flightId
+      ? flightsFor(flightId[1] as string, flightId[2] as string, flightId[3] as string, as_of ?? new Date().toISOString())
+      : [];
     const offer = allFlights.find((entry) => entry.id === offer_id) ?? null;
     if (!offer) {
       return makeError('NOT_FOUND', `Flight offer ${offer_id} was not found`, true);
@@ -162,10 +165,9 @@ export function createAirServer(options: { dbPath?: string; basePort?: number } 
       as_of: z.string().optional(),
     },
     outputSchema: z.object({
-      hold_id: z.string(),
-      state: z.literal('confirmed'),
-      offer_id: z.string(),
-      amount: z.number().int(),
+      hold_id: z.string().optional(), state: z.literal('confirmed').optional(), offer_id: z.string().optional(), amount: z.number().int().optional(),
+      isError: z.literal(true).optional(), code: z.enum(['NOT_FOUND', 'SOLD_OUT', 'HOLD_EXPIRED', 'FORBIDDEN', 'INVALID']).optional(),
+      message: z.string().optional(), retryable: z.boolean().optional(),
     }),
     annotations: {
       readOnlyHint: false,
@@ -184,22 +186,22 @@ export function createAirServer(options: { dbPath?: string; basePort?: number } 
     }
     const hold = store.readHold(hold_id);
     if (!hold) {
-      return makeError('NOT_FOUND', `Hold ${hold_id} was not found`, false);
+      return makeStructuredToolError('NOT_FOUND', `Hold ${hold_id} was not found`, false);
+    }
+    if (hold.state === 'expired' || new Date(hold.expires_at).getTime() <= Date.now()) {
+      store.setHoldState(hold_id, 'expired');
+      return makeStructuredToolError('HOLD_EXPIRED', `Hold ${hold_id} has expired`, true);
     }
     if (hold.state !== 'held') {
-      return makeError('INVALID', `Hold ${hold_id} is not held`, false);
-    }
-    if (new Date(hold.expires_at).getTime() < Date.now()) {
-      store.setHoldState(hold_id, 'expired');
-      return makeError('HOLD_EXPIRED', `Hold ${hold_id} has expired`, true);
+      return makeStructuredToolError('INVALID', `Hold ${hold_id} is not held`, false);
     }
     const chaos = store.consumeChaos();
     if (chaos) {
-      return makeError('SOLD_OUT', `Confirmation failed due to ${chaos}`, true);
+      return makeStructuredToolError('SOLD_OUT', `Confirmation failed due to ${chaos}`, true);
     }
     const expected = signConfirm(process.env.VELOX_CONFIRM_SECRET ?? 'dev-secret', hold_id, plan_id);
     if (!token || !verifyConfirm(process.env.VELOX_CONFIRM_SECRET ?? 'dev-secret', hold_id, plan_id, token)) {
-      return makeError('FORBIDDEN', 'Missing or invalid confirmation token', false);
+      return makeStructuredToolError('FORBIDDEN', 'Missing or invalid confirmation token', false);
     }
     const confirmed = store.confirmHold(hold_id) ?? hold;
     const result = { hold_id: confirmed.hold_id, state: 'confirmed' as const, offer_id: confirmed.offer_id, amount: confirmed.amount };

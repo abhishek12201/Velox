@@ -13,7 +13,7 @@ export interface AgentSession {
 }
 
 export interface LoopEvent {
-  type: 'say' | 'call' | 'result' | 'card' | 'chip' | 'error';
+  type: 'say' | 'call' | 'result' | 'card' | 'chip' | 'error' | 'recovery';
   [key: string]: unknown;
 }
 

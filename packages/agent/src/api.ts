@@ -4,6 +4,7 @@ import { BedrockProvider } from './llm/bedrock.js';
 import { ScenarioProvider } from './llm/mock.js';
 import { createRegistry, type ServerName } from './mcp/registry.js';
 import { runLoop, type AgentSession, type LoopEvent } from './loop.js';
+import { confirmPlan } from './saga.js';
 
 const allowedOrigin = 'http://localhost:5173';
 
@@ -26,6 +27,7 @@ function newSession(id: string, asOf: string): AgentSession {
       offers: new Map(),
       holds: new Map(),
       plans: new Map(),
+      cards: new Map(),
     },
   };
 }
@@ -87,6 +89,50 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{ a
       return;
     }
     res.status(400).json({ error: 'scope must be all or session with a session_id' });
+  });
+
+  app.post('/api/chaos', async (req, res) => {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as { server?: unknown }
+      : {};
+    const server = body.server;
+    if (server !== null && server !== undefined && !['air', 'stay', 'local', 'vault'].includes(String(server))) {
+      res.status(400).json({ error: 'server must be air, stay, local, vault, or null' });
+      return;
+    }
+    try {
+      await registry.setChaos(server as ServerName | null);
+      res.status(200).json({ ok: true, server: server ?? null, active: true });
+    } catch (error) {
+      res.status(502).json({ error: error instanceof Error ? error.message : 'Could not configure chaos' });
+    }
+  });
+
+  app.post('/api/confirm', async (req, res) => {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as { session_id?: unknown; plan_id?: unknown }
+      : {};
+    if (typeof body.session_id !== 'string' || typeof body.plan_id !== 'string') {
+      res.status(400).json({ error: 'session_id and plan_id are required' });
+      return;
+    }
+    const session = sessions.get(body.session_id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    try {
+      for (const event of await confirmPlan(session, body.plan_id, provider, registry)) writeSse(res, event);
+    } catch (error) {
+      writeSse(res, { type: 'error', message: error instanceof Error ? error.message : String(error) });
+    }
+    writeSse(res, { type: 'done' });
+    res.end();
   });
 
   app.post('/api/chat', async (req, res) => {

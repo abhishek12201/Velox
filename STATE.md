@@ -1,5 +1,5 @@
 # STATE (opencode keeps this <=40 lines; replace stale lines, no history)
-done: P5
+done: P7
 next: none
 license: Apache-2.0 (file added by human)
 llm_default: mock
@@ -15,4 +15,8 @@ decisions:
 - Air, stay, local, and vault server ports are independently configurable with VELOX_PORT_AIR, VELOX_PORT_STAY, VELOX_PORT_LOCAL, and VELOX_PORT_VAULT.
 - Vault stores stated/inferred profile preferences and saved trips in its own SQLite database; veloxcheck is an independent MCP SDK CLI.
 - Bedrock Converse uses VELOX_MODEL_ID, AWS_REGION, explicit bearer-token auth when configured, and bounded output/retry limits.
+- Mock itineraries use next-Friday-to-Sunday dates, round-trip air holds, a two-night stay, food, and activity.
+- Budget replanning releases comfort holds before switching to a cheaper feasible itinerary.
+- Confirmation uses allSettled, signed per-hold tokens, compensation, up to two recoveries, and vault persistence.
+- Expired holds are reacquired for the same offers before alternative replanning.
 open_issues:

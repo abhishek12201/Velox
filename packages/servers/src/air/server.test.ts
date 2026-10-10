@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createAirServer } from './server.js';
@@ -11,6 +14,7 @@ const testAsOf = '2026-06-01T00:00:00.000Z';
 let serverHandle: Server | undefined;
 let url: string;
 let airServer: ReturnType<typeof createAirServer>;
+let testDir: string;
 const clients = new Set<Client>();
 
 function waitForListening(server: { address: () => any }): Promise<void> {
@@ -29,7 +33,8 @@ function waitForListening(server: { address: () => any }): Promise<void> {
 }
 
 beforeEach(async () => {
-  airServer = createAirServer({ dbPath: ':memory:' });
+  testDir = await mkdtemp(join(tmpdir(), 'velox-air-test-'));
+  airServer = createAirServer({ dbPath: join(testDir, 'air.db') });
   const { server } = createServeApp(() => airServer as any, { serverName: 'air', port: 0 });
   serverHandle = server;
   await waitForListening(server);
@@ -48,6 +53,7 @@ afterEach(async () => {
       server.close((error) => error ? reject(error) : resolve());
     });
   }
+  await rm(testDir, { recursive: true, force: true });
   const failures = results.filter((result) => result.status === 'rejected');
   if (failures.length > 0) {
     throw new AggregateError(failures.map((result) => result.status === 'rejected' ? result.reason : undefined), 'Failed to close MCP test clients');
@@ -90,8 +96,10 @@ test('confirm without token or with wrong token is forbidden; valid token confir
   const offer = (search.structuredContent as { offers: Array<{ id: string; price_per_pax: number }> }).offers[0];
   const hold = await client.callTool({ name: 'hold_flight', arguments: { offer_id: offer.id, pax: 1, idem_key: 'confirm-key', as_of: testAsOf } });
   const holdId = (hold as any).hold_id ?? (hold.structuredContent as { hold_id: string } | undefined)?.hold_id;
+  const missing = await client.callTool({ name: 'confirm_flight', arguments: { hold_id: holdId, token: '', plan_id: 'plan_1' } });
+  expect((missing.structuredContent as { code: string }).code).toBe('FORBIDDEN');
   const wrong = await client.callTool({ name: 'confirm_flight', arguments: { hold_id: holdId, token: 'bad', plan_id: 'plan_1' } });
-  expect((wrong as any).isError).toBe(true);
+  expect((wrong.structuredContent as { code: string }).code).toBe('FORBIDDEN');
   const validToken = signConfirm('dev-secret', holdId, 'plan_1');
   const valid = await client.callTool({ name: 'confirm_flight', arguments: { hold_id: holdId, token: validToken, plan_id: 'plan_1' } });
   const validState = (valid as any).state ?? (valid.structuredContent as { state: string } | undefined)?.state;
@@ -108,7 +116,7 @@ test('cancel booking is idempotent and chaos triggers sold out once', async () =
   const chaos = await fetch('http://127.0.0.1:' + (serverHandle as any).address().port + '/admin/chaos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: 'SOLD_OUT', once: true }) });
   expect(await chaos.text()).toContain('ok');
   const fail = await client.callTool({ name: 'confirm_flight', arguments: { hold_id: holdId, token: validToken, plan_id: 'plan_2' } });
-  expect((fail as any).isError).toBe(true);
+  expect((fail.structuredContent as { code: string }).code).toBe('SOLD_OUT');
   const cancel = await client.callTool({ name: 'cancel_booking', arguments: { hold_id: holdId } });
   const cancelState = (cancel as any).state ?? (cancel.structuredContent as { state: string } | undefined)?.state;
   expect(cancelState).toBe('cancelled');

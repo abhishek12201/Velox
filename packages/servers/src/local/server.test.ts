@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { signConfirm } from '@velox/core';
@@ -10,6 +13,7 @@ const testAsOf = '2026-06-01T00:00:00.000Z';
 let serverHandle: Server | undefined;
 let url: string;
 let localServer: ReturnType<typeof createLocalServer>;
+let testDir: string;
 
 function waitForListening(server: Server): Promise<void> {
   return new Promise((resolve) => {
@@ -23,7 +27,8 @@ function waitForListening(server: Server): Promise<void> {
 }
 
 beforeEach(async () => {
-  localServer = createLocalServer({ dbPath: ':memory:' });
+  testDir = await mkdtemp(join(tmpdir(), 'velox-local-test-'));
+  localServer = createLocalServer({ dbPath: join(testDir, 'local.db') });
   const { server } = createServeApp(() => localServer, { serverName: 'local', port: 0 });
   serverHandle = server;
   await waitForListening(server);
@@ -40,6 +45,7 @@ afterEach(async () => {
       server.close((error) => error ? reject(error) : resolve());
     });
   }
+  await rm(testDir, { recursive: true, force: true });
 });
 
 async function withClient<T>(run: (client: Client) => Promise<T>): Promise<T> {
@@ -98,9 +104,9 @@ test('hold_table handles food and activities with release, token confirmation, c
     expect(localServer.store.countHolds()).toBe(1);
 
     const missing = await client.callTool({ name: 'confirm_table', arguments: { hold_id: holdId, token: '', plan_id: 'local-plan', as_of: testAsOf } });
-    expect(missing.isError).toBe(true);
+    expect((missing.structuredContent as { code: string }).code).toBe('FORBIDDEN');
     const wrong = await client.callTool({ name: 'confirm_table', arguments: { hold_id: holdId, token: 'wrong', plan_id: 'local-plan', as_of: testAsOf } });
-    expect(wrong.isError).toBe(true);
+    expect((wrong.structuredContent as { code: string }).code).toBe('FORBIDDEN');
     const token = signConfirm('dev-secret', holdId, 'local-plan');
     const confirmArgs = { hold_id: holdId, token, plan_id: 'local-plan', idem_key: 'local-confirm-repeat', as_of: testAsOf };
     const confirmed = await client.callTool({ name: 'confirm_table', arguments: confirmArgs });

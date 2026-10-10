@@ -6,6 +6,7 @@ export interface SessionLedger {
   offers: Map<string, Record<string, unknown>>;
   holds: Map<string, Hold>;
   plans: Map<string, Plan>;
+  cards: Map<string, Extract<Card, { kind: 'itinerary' }>>;
   lastCarousel?: Card;
 }
 
@@ -137,6 +138,7 @@ function makeItinerary(
     speech: `Your itinerary totals INR ${total}, within your INR ${budget} budget.`,
   };
   ledger.plans.set(plan.plan_id, plan);
+  ledger.cards.set(plan.plan_id, card);
   return { result: { ok: true, plan, card }, card };
 }
 

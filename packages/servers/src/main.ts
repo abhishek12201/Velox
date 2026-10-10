@@ -34,10 +34,10 @@ export function start(name: string, options: { port?: number; dbPath?: string } 
   const createServer = () => {
     const serverOptions = { basePort: port, dbPath: options.dbPath };
     switch (name) {
-      case 'air': return createAirServer(serverOptions).server;
-      case 'stay': return createStayServer(serverOptions).server;
-      case 'local': return createLocalServer(serverOptions).server;
-      case 'vault': return createVaultServer(serverOptions).server;
+      case 'air': return createAirServer(serverOptions);
+      case 'stay': return createStayServer(serverOptions);
+      case 'local': return createLocalServer(serverOptions);
+      case 'vault': return createVaultServer(serverOptions);
     }
   };
 

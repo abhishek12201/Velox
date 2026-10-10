@@ -71,7 +71,7 @@ export function createServeApp(createServer: () => { connect: (transport: Stream
       const record = sessions.get(String(session));
       record?.store?.setChaos(code, once);
     }
-    res.status(200).json({ ok: true, code, once, active: true });
+    res.status(200).json({ ok: true, code, once, active: Boolean(activeChaosTarget) });
   });
 
   const mcpPostHandler = async (req: Request, res: Response) => {

@@ -17,3 +17,11 @@ export function makeError(code: ErrorCode, message: string, retryable = false): 
     content: [{ type: 'text', text: message }],
   };
 }
+
+export function makeStructuredToolError(code: ErrorCode, message: string, retryable = false) {
+  const structuredContent = { isError: true as const, code, message, retryable };
+  return {
+    content: [{ type: 'text' as const, text: message }],
+    structuredContent,
+  };
+}

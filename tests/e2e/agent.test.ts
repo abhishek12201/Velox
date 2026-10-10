@@ -93,11 +93,11 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
     const results = events.filter((event) => event.type === 'result');
     const cards = events.filter((event) => event.type === 'card');
     const firstResultIndex = events.findIndex((event) => event.type === 'result');
-    const firstThreeCalls = events.slice(0, firstResultIndex).filter((event) => event.type === 'call');
-    expect(firstThreeCalls).toHaveLength(3);
-    expect(new Set(firstThreeCalls.map((event) => event.server))).toEqual(new Set(['air', 'stay', 'local']));
-    expect(calls.length).toBeGreaterThanOrEqual(7);
-    expect(results.length).toBeGreaterThanOrEqual(7);
+    const firstSearchCalls = events.slice(0, firstResultIndex).filter((event) => event.type === 'call');
+    expect(firstSearchCalls).toHaveLength(5);
+    expect(new Set(firstSearchCalls.map((event) => event.server))).toEqual(new Set(['air', 'stay', 'local']));
+    expect(calls.length).toBeGreaterThanOrEqual(12);
+    expect(results.length).toBeGreaterThanOrEqual(12);
     expect(calls.filter((event) => event.server !== 'internal').every((event) => {
       const args = event.args as Record<string, unknown>;
       return args.as_of === asOf;
@@ -117,8 +117,8 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
       return Boolean(value && typeof value === 'object' && (value as Record<string, unknown>).amount);
     }))).toBe(true);
     const successfulHoldResults = results.filter((event) => event.ok && typeof event.summary === 'string' && event.summary.startsWith('held INR '));
-    expect(successfulHoldResults).toHaveLength(3);
-    expect((itinerary.days as Array<{ items: unknown[] }>)[0]?.items).toHaveLength(3);
+    expect(successfulHoldResults).toHaveLength(6);
+    expect((itinerary.days as Array<{ items: unknown[] }>)[0]?.items).toHaveLength(6);
     const finalMessages = providerInputs.at(-1)?.messages ?? [];
     const held = new Map<string, number>();
     for (const message of finalMessages) {

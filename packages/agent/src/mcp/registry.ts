@@ -27,6 +27,8 @@ interface RegistryClient {
 export interface Registry {
   tools: RegistryTool[];
   invoke(name: string, args: Record<string, unknown>, asOf: string): Promise<Record<string, unknown>>;
+  invokeApp(name: string, args: Record<string, unknown>, asOf: string): Promise<Record<string, unknown>>;
+  setChaos(server: ServerName | null): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -57,7 +59,15 @@ function structuredResult(result: unknown): Record<string, unknown> {
       ? value.content.find((entry) => entry && typeof entry === 'object' && (entry as Record<string, unknown>).type === 'text')
       : undefined;
     if (text && typeof (text as Record<string, unknown>).text === 'string') {
-      const parsed: unknown = JSON.parse((text as Record<string, unknown>).text as string);
+      const textValue = (text as Record<string, unknown>).text as string;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(textValue);
+      } catch (error) {
+        if (value.isError !== true) throw error;
+        const code = textValue.match(/\b(NOT_FOUND|SOLD_OUT|HOLD_EXPIRED|FORBIDDEN|INVALID)\b/)?.[1] ?? 'INVALID';
+        return { isError: true, code, message: textValue, retryable: code === 'SOLD_OUT' || code === 'HOLD_EXPIRED' };
+      }
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
     }
   }
@@ -101,19 +111,46 @@ export async function createRegistry(urls: Partial<Record<ServerName, string>> =
     clients.set(entry.server, entry);
   }
   const tools = connected.flatMap((entry) => entry.tools);
+  async function invokeTool(name: string, args: Record<string, unknown>, asOf: string, appOnly: boolean) {
+    const tool = tools.find((entry) => entry.name === name);
+    if (!tool) throw new Error(`Unknown MCP tool: ${name}`);
+    if ((tool.audience === 'app') !== appOnly) {
+      throw new Error(appOnly
+        ? `Model-visible MCP tool cannot be invoked by the app saga: ${name}`
+        : `App-only MCP tool is unavailable to the agent: ${name}`);
+    }
+    const entry = clients.get(tool.server);
+    if (!entry) throw new Error(`MCP server is not connected: ${tool.server}`);
+    const result = await entry.client.callTool({
+      name: tool.remoteName,
+      arguments: { ...args, as_of: asOf },
+    });
+    return structuredResult(result);
+  }
   return {
     tools,
-    async invoke(name, args, asOf) {
-      const tool = tools.find((entry) => entry.name === name);
-      if (!tool) throw new Error(`Unknown MCP tool: ${name}`);
-      if (tool.audience === 'app') throw new Error(`App-only MCP tool is unavailable to the agent: ${name}`);
-      const entry = clients.get(tool.server);
-      if (!entry) throw new Error(`MCP server is not connected: ${tool.server}`);
-      const result = await entry.client.callTool({
-        name: tool.remoteName,
-        arguments: { ...args, as_of: asOf },
-      });
-      return structuredResult(result);
+    invoke(name, args, asOf) {
+      return invokeTool(name, args, asOf, false);
+    },
+    invokeApp(name, args, asOf) {
+      return invokeTool(name, args, asOf, true);
+    },
+    async setChaos(server) {
+      const targets = server ? [server] : serverNames;
+      await Promise.all(targets.map(async (target) => {
+        const url = new URL(serverUrl(target, urls));
+        url.pathname = '/admin/chaos';
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ code: 'SOLD_OUT', once: true }),
+        });
+        if (!response.ok) throw new Error(`Could not enable chaos on ${target}: HTTP ${response.status}`);
+        const result: unknown = await response.json();
+        if (!result || typeof result !== 'object' || (result as { active?: unknown }).active !== true) {
+          throw new Error(`Could not enable chaos on ${target}: server has no active hold store`);
+        }
+      }));
     },
     async close() {
       await Promise.all([...clients.values()].map(({ client }) => client.close()));

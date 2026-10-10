@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { stays, verifyConfirm } from '@velox/core';
 import { HoldStore } from '../kit/store.js';
-import { makeError } from '../kit/errors.js';
+import { makeError, makeStructuredToolError } from '../kit/errors.js';
 
 const areas = ['north', 'south', 'central'] as const;
 
@@ -108,7 +108,11 @@ export function createStayServer(options: { dbPath?: string; basePort?: number }
   server.registerTool('confirm_stay', {
     description: 'Confirm a stay hold using a valid HMAC token and plan id.',
     inputSchema: { hold_id: z.string(), token: z.string(), plan_id: z.string(), idem_key: z.string().optional(), as_of: z.string().optional() },
-    outputSchema: z.object({ hold_id: z.string(), state: z.literal('confirmed'), offer_id: z.string(), amount: z.number().int() }),
+    outputSchema: z.object({
+      hold_id: z.string().optional(), state: z.literal('confirmed').optional(), offer_id: z.string().optional(), amount: z.number().int().optional(),
+      isError: z.literal(true).optional(), code: z.enum(['NOT_FOUND', 'SOLD_OUT', 'HOLD_EXPIRED', 'FORBIDDEN', 'INVALID']).optional(),
+      message: z.string().optional(), retryable: z.boolean().optional(),
+    }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     _meta: { 'velox/audience': 'app' },
   }, async ({ hold_id, token, plan_id, idem_key }: any): Promise<any> => {
@@ -116,17 +120,17 @@ export function createStayServer(options: { dbPath?: string; basePort?: number }
     const cached = store.getIdempotent<Record<string, unknown>>(idemKey);
     if (cached) return { content: [{ type: 'text' as const, text: JSON.stringify(cached) }], structuredContent: cached };
     const hold = store.readHold(hold_id);
-    if (!hold) return makeError('NOT_FOUND', `Hold ${hold_id} was not found`, false);
-    if (hold.state !== 'held') return makeError('INVALID', `Hold ${hold_id} is not held`, false);
-    if (Date.parse(hold.expires_at) < Date.now()) {
+    if (!hold) return makeStructuredToolError('NOT_FOUND', `Hold ${hold_id} was not found`, false);
+    if (hold.state === 'expired' || Date.parse(hold.expires_at) <= Date.now()) {
       store.setHoldState(hold_id, 'expired');
-      return makeError('HOLD_EXPIRED', `Hold ${hold_id} has expired`, true);
+      return makeStructuredToolError('HOLD_EXPIRED', `Hold ${hold_id} has expired`, true);
     }
+    if (hold.state !== 'held') return makeStructuredToolError('INVALID', `Hold ${hold_id} is not held`, false);
     const chaos = store.consumeChaos();
-    if (chaos) return makeError('SOLD_OUT', `Confirmation failed due to ${chaos}`, true);
+    if (chaos) return makeStructuredToolError('SOLD_OUT', `Confirmation failed due to ${chaos}`, true);
     const secret = process.env.VELOX_CONFIRM_SECRET ?? 'dev-secret';
     if (!token || !verifyConfirm(secret, hold_id, plan_id, token)) {
-      return makeError('FORBIDDEN', 'Missing or invalid confirmation token', false);
+      return makeStructuredToolError('FORBIDDEN', 'Missing or invalid confirmation token', false);
     }
     const confirmed = store.confirmHold(hold_id) ?? hold;
     const result = { hold_id: confirmed.hold_id, state: 'confirmed' as const, offer_id: confirmed.offer_id, amount: confirmed.amount };
