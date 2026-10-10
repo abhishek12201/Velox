@@ -1,21 +1,28 @@
 import { execFile as execFileCallback } from 'node:child_process';
+import { createServer as createNetServer } from 'node:net';
 import { promisify } from 'node:util';
-import type { Server } from 'node:http';
 import { expect, test } from 'vitest';
-import { createAirServer } from './air/server.js';
-import { createLocalServer } from './local/server.js';
-import { createServeApp } from './kit/serve.js';
-import { createStayServer } from './stay/server.js';
-import { createVaultServer } from './vault/server.js';
+import { start } from './main.js';
 
 const execFile = promisify(execFileCallback);
 
-async function checkServer(
-  serverName: string,
-  createServer: (options: { dbPath: string }) => { connect: (transport: any) => Promise<void>; close: () => Promise<void> },
-): Promise<string> {
-  const instance = createServer({ dbPath: ':memory:' });
-  const { server } = createServeApp(() => instance, { serverName, port: 0 });
+async function freePort(): Promise<number> {
+  const probe = createNetServer();
+  await new Promise<void>((resolve, reject) => {
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', resolve);
+  });
+  const address = probe.address();
+  if (!address || typeof address === 'string') throw new Error('Port probe did not bind to a TCP port');
+  const port = address.port;
+  await new Promise<void>((resolve, reject) => {
+    probe.close((error) => error ? reject(error) : resolve());
+  });
+  return port;
+}
+
+async function checkServer(serverName: string): Promise<string> {
+  const { server } = start(serverName, { port: await freePort(), dbPath: ':memory:' });
   await new Promise<void>((resolve, reject) => {
     if (server.listening) return resolve();
     server.once('error', reject);
@@ -39,14 +46,8 @@ async function checkServer(
 }
 
 test('veloxcheck strict mode passes on all four in-process servers', async () => {
-  const servers: Array<[string, (options: { dbPath: string }) => { connect: (transport: any) => Promise<void>; close: () => Promise<void> }]> = [
-    ['air', createAirServer],
-    ['stay', createStayServer],
-    ['local', createLocalServer],
-    ['vault', createVaultServer],
-  ];
-  for (const [name, createServer] of servers) {
-    const output = await checkServer(name, createServer);
+  for (const name of ['air', 'stay', 'local', 'vault']) {
+    const output = await checkServer(name);
     expect(output).toContain('Protocol: 2025-11-25 (strict)');
     expect(output).toContain('| PASS');
     expect(output).not.toContain('| FAIL');
