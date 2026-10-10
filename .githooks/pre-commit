@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+root="$(git rev-parse --show-toplevel)"
+bash "$root/plan/tools/verify.sh" || { echo "pre-commit blocked: plan lock broken"; exit 1; }

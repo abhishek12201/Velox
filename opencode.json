@@ -1,0 +1,40 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "edit": {
+      "*": "allow",
+      "AGENTS.md": "deny",
+      "opencode.json": "deny",
+      "plan/**": "deny",
+      ".githooks/**": "deny"
+    },
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    },
+    "bash": {
+      "*": "allow",
+      "git push*": "deny",
+      "git config*": "deny",
+      "git tag -d*": "deny",
+      "git tag -f*": "deny",
+      "git reset*": "deny",
+      "git rebase*": "deny",
+      "git filter*": "deny",
+      "git commit*--no-verify*": "deny",
+      "git commit*-n *": "deny",
+      "sudo*": "deny",
+      "chmod*": "deny",
+      "chown*": "deny",
+      "chattr*": "deny",
+      "rm*plan*": "deny",
+      "rm*AGENTS*": "deny",
+      "rm*opencode.json*": "deny",
+      "rm*.githooks*": "deny",
+      "mv*plan*": "deny",
+      "sed -i*plan*": "deny"
+    }
+  }
+}
