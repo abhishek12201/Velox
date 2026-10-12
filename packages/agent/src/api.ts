@@ -7,8 +7,6 @@ import { runLoop, type AgentSession, type LoopEvent } from './loop.js';
 import { confirmPlan } from './saga.js';
 import { TripScheduler } from './scheduler.js';
 
-const allowedOrigin = 'http://localhost:5173';
-
 export interface AgentAppOptions {
   serverUrls?: Partial<Record<ServerName, string>>;
   provider?: LlmProvider;
@@ -84,18 +82,19 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
   app.use(express.json());
   app.use((req: Request, res: Response, next) => {
     const origin = req.get('origin');
-    if (origin && origin !== allowedOrigin) {
+    const allowedOrigins = new Set(['http://localhost:5173', process.env.VELOX_WEB_ORIGIN || 'http://localhost:5173']);
+    if (origin && !allowedOrigins.has(origin)) {
       res.status(403).json({ error: 'Forbidden: unsupported origin' });
       return;
     }
-    if (origin === allowedOrigin) {
-      res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    if (origin && allowedOrigins.has(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
     }
     if (req.method === 'OPTIONS') {
-      res.sendStatus(origin === allowedOrigin ? 204 : 403);
+      res.sendStatus(origin && allowedOrigins.has(origin) ? 204 : 403);
       return;
     }
     next();

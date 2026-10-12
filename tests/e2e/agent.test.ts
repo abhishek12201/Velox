@@ -47,6 +47,8 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
   let apiServer: Server | undefined;
 
   try {
+    const webOrigin = 'https://velox-console.example';
+    vi.stubEnv('VELOX_WEB_ORIGIN', webOrigin);
     const serverUrls: Partial<Record<typeof serverNames[number], string>> = {};
     for (const name of serverNames) {
       const started = start(name, { port: 0, dbPath: join(dataDir, `${name}.db`) });
@@ -78,9 +80,14 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
     const apiPort = await waitForListening(apiServer);
     const baseUrl = `http://127.0.0.1:${apiPort}`;
 
-    const health = await fetch(`${baseUrl}/api/health`);
+    const health = await fetch(`${baseUrl}/api/health`, { headers: { Origin: webOrigin } });
     expect(health.status).toBe(200);
+    expect(health.headers.get('access-control-allow-origin')).toBe(webOrigin);
     expect(await health.json()).toEqual({ ok: true });
+    const localHealth = await fetch(`${baseUrl}/api/health`, { headers: { Origin: 'http://localhost:5173' } });
+    expect(localHealth.headers.get('access-control-allow-origin')).toBe('http://localhost:5173');
+    const blockedHealth = await fetch(`${baseUrl}/api/health`, { headers: { Origin: 'https://untrusted.example' } });
+    expect(blockedHealth.status).toBe(403);
 
     const response = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
@@ -153,6 +160,7 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
     if (agent) await cleanup(() => agent?.close() ?? Promise.resolve());
     for (const { server } of servers) await cleanup(() => closeServer(server));
     log.mockRestore();
+    vi.unstubAllEnvs();
     await cleanup(() => rm(dataDir, { recursive: true, force: true }));
     if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Agent e2e cleanup failed');
   }

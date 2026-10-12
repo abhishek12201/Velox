@@ -1,6 +1,6 @@
 # STATE (opencode keeps this <=40 lines; replace stale lines, no history)
-done: P9
-next: none
+done: P10
+next: P11
 license: Apache-2.0 (file added by human)
 llm_default: mock
 sdk_protocol_2025-11-25: 2025-11-25
@@ -24,5 +24,7 @@ decisions:
 - Same-trip mock memory loads the profile and latest trip, scales party size and budget, and honors departure limits.
 - The trip scheduler ticks only from main, uses idempotent weather nudges, and confirms indoor replacements before cancelling outdoor holds.
 - Successful saga confirmation marks session holds confirmed so downstream scheduling sees the persisted booking state.
+- The web console uses an in-memory session id, streamed chat/confirm requests, reconnecting event streams, and responsive React/CSS views.
+- Browser agent connectivity uses VITE_AGENT_URL or ?agent=; CORS allows VELOX_WEB_ORIGIN and localhost:5173.
 - seed:demo creates synthetic history; reset clears workspace and configured data directories.
 open_issues:
