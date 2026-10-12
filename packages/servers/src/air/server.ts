@@ -241,12 +241,19 @@ export function createAirServer(options: { dbPath?: string; basePort?: number } 
     };
   });
 
+  let closePromise: Promise<void> | undefined;
   return {
     server,
     store,
     protocolVersion: MCP_PROTOCOL_VERSION,
     port: basePort,
     connect: (transport: any) => server.connect(transport),
-    close: () => server.close(),
+    close: () => closePromise ??= (async () => {
+      try {
+        await server.close();
+      } finally {
+        store.close();
+      }
+    })(),
   };
 }

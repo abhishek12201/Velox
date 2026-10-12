@@ -155,9 +155,16 @@ export function createLocalServer(options: { dbPath?: string; basePort?: number 
     return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
   });
 
+  let closePromise: Promise<void> | undefined;
   return {
     server, store, port: basePort,
     connect: (transport: any) => server.connect(transport),
-    close: () => server.close(),
+    close: () => closePromise ??= (async () => {
+      try {
+        await server.close();
+      } finally {
+        store.close();
+      }
+    })(),
   };
 }

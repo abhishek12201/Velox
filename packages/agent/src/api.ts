@@ -19,6 +19,12 @@ function writeSse(res: Response, event: LoopEvent | { type: 'done' }): void {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
+interface EventSubscriber {
+  response: Response;
+  heartbeat: ReturnType<typeof setInterval>;
+  close: () => void;
+}
+
 function newSession(id: string, asOf: string): AgentSession {
   return {
     id,
@@ -59,8 +65,20 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
   const defaultAsOf = options.asOf ?? new Date().toISOString();
   const scheduler = new TripScheduler(() => [...sessions.values()], registry, provider, defaultAsOf);
   const pendingEvents = new Map<string, LoopEvent[]>();
+  const subscribers = new Map<string, Set<EventSubscriber>>();
   const publish = (sessionId: string, events: LoopEvent[]) => {
-    pendingEvents.set(sessionId, [...(pendingEvents.get(sessionId) ?? []), ...events]);
+    const sessionSubscribers = subscribers.get(sessionId);
+    if (!sessionSubscribers?.size) {
+      pendingEvents.set(sessionId, [...(pendingEvents.get(sessionId) ?? []), ...events]);
+      return;
+    }
+    for (const event of events) {
+      for (const subscriber of sessionSubscribers) {
+        if (!subscriber.response.destroyed && !subscriber.response.writableEnded) {
+          writeSse(subscriber.response, event);
+        }
+      }
+    }
   };
   const app = express();
   app.use(express.json());
@@ -93,7 +111,7 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
 
   app.post('/api/clock', async (req, res) => {
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
-      ? req.body as { to?: unknown; plus_hours?: unknown; preset?: unknown }
+      ? req.body as { to?: unknown; plus_hours?: unknown; preset?: unknown; allow_past?: unknown }
       : {};
     try {
       let target: string;
@@ -121,6 +139,15 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
         res.status(400).json({ error: 'Provide exactly one of to, plus_hours, or preset: trip_day' });
         return;
       }
+      const targetTime = Date.parse(target);
+      if (!Number.isFinite(targetTime)) {
+        res.status(400).json({ error: 'Clock value must be a valid ISO timestamp' });
+        return;
+      }
+      if (body.to !== undefined && targetTime < Date.parse(scheduler.now()) && body.allow_past !== true) {
+        res.status(400).json({ error: 'Clock value cannot be earlier than the current time without allow_past: true' });
+        return;
+      }
       scheduler.setNow(target);
       for (const session of sessions.values()) publish(session.id, [{ type: 'clock', now: scheduler.now() }]);
       const scheduled = await scheduler.tick();
@@ -140,11 +167,30 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
     res.status(200);
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
-    const events = pendingEvents.get(sessionId) ?? [];
-    for (const event of events) writeSse(res, event);
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    let sessionSubscribers = subscribers.get(sessionId);
+    if (!sessionSubscribers) {
+      sessionSubscribers = new Set();
+      subscribers.set(sessionId, sessionSubscribers);
+    }
+    let subscriber: EventSubscriber;
+    const close = () => {
+      if (!subscriber) return;
+      clearInterval(subscriber.heartbeat);
+      sessionSubscribers?.delete(subscriber);
+      if (sessionSubscribers?.size === 0) subscribers.delete(sessionId);
+    };
+    const heartbeat = setInterval(() => {
+      if (!res.destroyed && !res.writableEnded) res.write(': ping\n\n');
+    }, 15_000);
+    heartbeat.unref();
+    subscriber = { response: res, heartbeat, close };
+    sessionSubscribers.add(subscriber);
+    req.once('close', close);
+    res.once('close', close);
+    for (const event of pendingEvents.get(sessionId) ?? []) writeSse(res, event);
     pendingEvents.delete(sessionId);
-    writeSse(res, { type: 'done' });
-    res.end();
   });
 
   app.post('/api/reset', async (req, res) => {
@@ -277,6 +323,15 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
     async close() {
       scheduler.stop();
       pendingEvents.clear();
+      for (const sessionSubscribers of subscribers.values()) {
+        for (const subscriber of sessionSubscribers) {
+          subscriber.close();
+          if (!subscriber.response.destroyed && !subscriber.response.writableEnded) {
+            subscriber.response.end();
+          }
+        }
+      }
+      subscribers.clear();
       sessions.clear();
       try {
         await registry.close();

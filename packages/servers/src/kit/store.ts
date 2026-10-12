@@ -50,6 +50,10 @@ export class HoldStore {
     `);
   }
 
+  close(): void {
+    if (this.db.open) this.db.close();
+  }
+
   private nowIso(): string {
     return new Date().toISOString();
   }
