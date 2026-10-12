@@ -13,6 +13,14 @@ describe('core seed bundle', () => {
     expect(places()).toEqual(places());
   });
 
+  test('activity names match their indoor or outdoor classification', () => {
+    const activities = places().filter((offer) => offer.kind === 'activity');
+    const outdoorOnlyTerms = /walk|paddle|kayak|cycle|trail|run|beach|picnic|boardwalk/i;
+    expect(activities).toHaveLength(16);
+    expect(activities.filter((activity) => activity.outdoor)).toHaveLength(8);
+    expect(activities.filter((activity) => !activity.outdoor && outdoorOnlyTerms.test(activity.name))).toEqual([]);
+  });
+
   test('flight pricing and timing bands match the spec', () => {
     const offers = flightsFor('BLR', 'GOX', '2026-06-30', '2026-06-27');
     expect(offers.length).toBeGreaterThanOrEqual(7);

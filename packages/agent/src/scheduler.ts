@@ -207,8 +207,12 @@ export class TripScheduler {
         session.ledger.plans.set(planId, swapPlan);
         const swap: Swap = { oldHoldId: outdoor.hold_id, newHoldId: newHold.hold_id, tripPlanId, day, reason: 'weather' };
         session.ledger.swaps.set(planId, swap);
-        const difference = outdoor.amount - newHold.amount;
-        const change = difference >= 0 ? `saves INR ${difference}` : `costs INR ${Math.abs(difference)} more`;
+        const delta = newHold.amount - outdoor.amount;
+        const change = delta > 0
+          ? `costs INR ${delta} more`
+          : delta < 0
+            ? `saves INR ${Math.abs(delta)}`
+            : 'costs the same';
         const nudge: Nudge = {
           id: randomUUID(),
           kind: 'nudge',

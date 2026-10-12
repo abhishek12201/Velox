@@ -21,6 +21,7 @@ export type RegistryTool = ToolDefinition & {
 interface RegistryClient {
   server: ServerName;
   client: Client;
+  transport: StreamableHTTPClientTransport;
   tools: RegistryTool[];
 }
 
@@ -95,7 +96,7 @@ export async function createRegistry(urls: Partial<Record<ServerName, string>> =
             audience,
           } satisfies RegistryTool;
         });
-        connected.push({ server, client, tools });
+        connected.push({ server, client, transport, tools });
       } catch (error) {
         await client.close();
         throw error;
@@ -153,8 +154,18 @@ export async function createRegistry(urls: Partial<Record<ServerName, string>> =
       }));
     },
     async close() {
-      await Promise.all([...clients.values()].map(({ client }) => client.close()));
+      const results = await Promise.allSettled([...clients.values()].map(async ({ client, transport }) => {
+        try {
+          await transport.terminateSession();
+        } finally {
+          await client.close();
+        }
+      }));
       clients.clear();
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failures.length) {
+        throw new AggregateError(failures.map((failure) => failure.reason), 'Could not close all MCP sessions');
+      }
     },
   };
 }

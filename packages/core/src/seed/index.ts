@@ -174,10 +174,23 @@ const foodNames = [
   'Canopy Canteen', 'Mint & Map'
 ];
 
-const activityNames = [
-  'Mopa Walk', 'Mango Ridge', 'Sunset Cycle', 'Cedar Boardwalk', 'Harbor Kayaks', 'River Trail',
-  'Grove Yoga', 'Lantern Market', 'Stone Path', 'Palm Art', 'Birdwatch Loop', 'Banyan Trek',
-  'Skyline Picnic', 'Downtown Flow', 'Dune Run', 'Cove Paddle'
+const activities: Array<{ name: string; outdoor: boolean; priceBand: 'free' | 'standard' }> = [
+  { name: 'North Beach Walk', outdoor: true, priceBand: 'free' },
+  { name: 'Spice-plantation cooking class', outdoor: false, priceBand: 'standard' },
+  { name: 'Harbor Kayaks', outdoor: true, priceBand: 'standard' },
+  { name: 'Art gallery visit', outdoor: false, priceBand: 'standard' },
+  { name: 'Sunset Cycling', outdoor: true, priceBand: 'standard' },
+  { name: 'Spa session', outdoor: false, priceBand: 'free' },
+  { name: 'River Trail', outdoor: true, priceBand: 'standard' },
+  { name: 'Pottery workshop', outdoor: false, priceBand: 'standard' },
+  { name: 'Cedar Boardwalk', outdoor: true, priceBand: 'standard' },
+  { name: 'Cinema', outdoor: false, priceBand: 'standard' },
+  { name: 'Dune Run', outdoor: true, priceBand: 'free' },
+  { name: 'Indoor climbing', outdoor: false, priceBand: 'standard' },
+  { name: 'Cove Paddle', outdoor: true, priceBand: 'standard' },
+  { name: 'Pottery studio', outdoor: false, priceBand: 'standard' },
+  { name: 'Skyline Picnic', outdoor: true, priceBand: 'standard' },
+  { name: 'Museum visit', outdoor: false, priceBand: 'free' },
 ];
 
 export function places(): PlaceOffer[] {
@@ -198,17 +211,18 @@ export function places(): PlaceOffer[] {
     });
   }
 
-  for (let index = 0; index < activityNames.length; index += 1) {
+  for (let index = 0; index < activities.length; index += 1) {
     const area = areas[foodNames.length + index];
-    const price = (index % 5 === 0 ? 0 : 320 + ((index * 67) % 3200));
+    const activity = activities[index];
+    const price = activity.priceBand === 'free' ? 0 : 320 + ((index * 67) % 3200);
     offers.push({
       id: `activity_${index + 1}`,
       kind: 'activity',
-      name: activityNames[index],
+      name: activity.name,
       area,
       price_per_head: price,
-      tags: index % 2 === 0 ? ['outdoor', 'active'] : ['calm', 'guided'],
-      outdoor: index % 2 === 0,
+      tags: activity.outdoor ? ['outdoor', 'active'] : ['calm', 'guided'],
+      outdoor: activity.outdoor,
     });
   }
 

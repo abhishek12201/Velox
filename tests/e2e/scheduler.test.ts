@@ -232,7 +232,7 @@ test('S6 emits one trip-day nudge and accepting it confirms indoor then cancels 
     const nudges = events.filter((event) => event.type === 'nudge');
     expect(nudges).toHaveLength(1);
     const nudge = nudges[0]?.card as Record<string, unknown>;
-    expect(nudge.text).toMatch(/Rain is forecast.*Replace .* with .*; the change .*INR/);
+    expect(nudge.text).toMatch(/Rain is forecast.*Replace .* with .*; the change (?:costs INR \d+ more|saves INR \d+|costs the same)\./);
     expect(nudge.plan_id).toBeTypeOf('string');
 
     const accepted = await postJson(env.baseUrl, '/api/accept', { session_id: 's6', plan_id: nudge.plan_id });
@@ -293,6 +293,12 @@ test('live events stream delivers one nudge for the standard outdoor demo plan',
   expect(tripDay.status).toBe(200);
   const nudge = await stream.waitFor((event) => event.type === 'nudge', 5_000);
   expect(nudge.type).toBe('nudge');
+  const nudgeCard = nudge.card as Record<string, unknown>;
+  console.log(`S6 live nudge: ${String(nudgeCard.text)}`);
+  expect(nudgeCard.text).toBe(
+    'Rain is forecast for 2026-06-06. Replace North Beach Walk with Museum visit; the change costs the same.',
+  );
+  expect(nudgeCard.text).not.toContain('saves INR 0');
   const later = await postJson(env.baseUrl, '/api/clock', { plus_hours: 2 });
   expect(later.status).toBe(200);
   await stream.waitFor((event) => event.type === 'clock' && event.now === '2026-06-05T10:00:00.000Z');
