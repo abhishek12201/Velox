@@ -12,7 +12,7 @@
   "scripts": {
     "check": "tsc --noEmit -p packages/core/tsconfig.json --pretty false --tsBuildInfoFile /tmp/velox-core-check.tsbuildinfo && tsc --noEmit -p packages/servers/tsconfig.json --pretty false --tsBuildInfoFile /tmp/velox-servers-check.tsbuildinfo && tsc --noEmit -p packages/agent/tsconfig.json --pretty false --tsBuildInfoFile /tmp/velox-agent-check.tsbuildinfo && tsc --noEmit -p packages/web/tsconfig.json --pretty false --tsBuildInfoFile /tmp/velox-web-check.tsbuildinfo && tsc --noEmit -p packages/veloxcheck/tsconfig.json --pretty false --tsBuildInfoFile /tmp/velox-veloxcheck-check.tsbuildinfo && vitest run --reporter=dot",
     "dev:agent": "tsx packages/agent/src/main.ts",
-    "dev:all": "concurrently \"npm run dev:servers\" \"npm run dev:agent\" \"vite --config packages/web/vite.config.ts\"",
+    "dev:all": "concurrently \"npm run dev:servers\" \"npm run dev:agent\" \"npm run dev -w @velox/web\"",
     "dev:servers": "concurrently \"tsx packages/servers/src/main.ts air\" \"tsx packages/servers/src/main.ts stay\" \"tsx packages/servers/src/main.ts local\" \"tsx packages/servers/src/main.ts vault\"",
     "demo": "node -e \"console.log('not implemented yet')\"",
     "seed:demo": "tsx scripts/seed-demo.ts",

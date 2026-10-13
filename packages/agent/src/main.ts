@@ -18,7 +18,8 @@ async function connectAgent() {
 export async function startAgent(): Promise<{ close: () => Promise<void> }> {
   const agent = await connectAgent();
   const port = Number(process.env.VELOX_PORT_AGENT ?? 7100);
-  const server = agent.app.listen(port, '127.0.0.1');
+  const host = process.env.VELOX_AGENT_HOST ?? '127.0.0.1';
+  const server = agent.app.listen(port, host);
   try {
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
@@ -31,7 +32,7 @@ export async function startAgent(): Promise<{ close: () => Promise<void> }> {
   agent.startScheduler();
   const address = server.address();
   const actualPort = typeof address === 'object' && address ? address.port : port;
-  console.log(`agent listening on http://127.0.0.1:${actualPort}`);
+  console.log(`agent listening on http://${host}:${actualPort}`);
   return {
     async close() {
       agent.stop();
