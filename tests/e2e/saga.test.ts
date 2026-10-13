@@ -148,6 +148,76 @@ test('S3 confirms each held leg and saves the itinerary', async () => {
   }
 }, 30_000);
 
+test('separate sessions receive distinct holds and stay-CHAOS recovery rolls back before confirming', async () => {
+  const env = await fixture();
+  const planTrip = async (sessionId: string) => {
+    const response = await postJson(env.baseUrl, '/api/chat', {
+      session_id: sessionId,
+      text: 'Weekend in Goa under 20k',
+    });
+    const events = eventsFrom(await response.text());
+    const card = events.filter((event) => event.type === 'card')
+      .map((event) => event.card as Record<string, unknown>)
+      .find((value) => value.kind === 'itinerary');
+    expect(card?.plan_id).toBeTypeOf('string');
+    const days = card?.days as Array<{ items: Array<{ hold_id?: string; status: string }> }>;
+    const holdIds = days.flatMap((day) => day.items.map((item) => item.hold_id)
+      .filter((holdId): holdId is string => typeof holdId === 'string'));
+    expect(holdIds.length).toBeGreaterThan(0);
+    return { planId: card?.plan_id as string, holdIds };
+  };
+  const confirm = async (sessionId: string, planId: string) => {
+    const response = await postJson(env.baseUrl, '/api/confirm', { session_id: sessionId, plan_id: planId });
+    return eventsFrom(await response.text());
+  };
+  const holdRows = (holdIds: string[]) => {
+    const rows: Array<{ hold_id: string; state: string; expires_at: string }> = [];
+    for (const name of ['air', 'stay', 'local'] as const) {
+      const db = new Database(env.dbPaths[name], { readonly: true });
+      try {
+        rows.push(...db.prepare(
+          `SELECT hold_id, state, expires_at FROM holds WHERE hold_id IN (${holdIds.map(() => '?').join(',')})`,
+        ).all(...holdIds) as Array<{ hold_id: string; state: string; expires_at: string }>);
+      } finally {
+        db.close();
+      }
+    }
+    return rows;
+  };
+  try {
+    const planA = await planTrip('session-A');
+    const confirmedA = await confirm('session-A', planA.planId);
+    expect(confirmedA.some((event) => event.type === 'card' &&
+      (event.card as Record<string, unknown>).status === 'confirmed')).toBe(true);
+
+    const planB = await planTrip('session-B');
+    expect(planB.holdIds.some((id) => planA.holdIds.includes(id))).toBe(false);
+    const rowsB = holdRows(planB.holdIds);
+    expect(rowsB).toHaveLength(planB.holdIds.length);
+    expect(rowsB.every((row) => row.state === 'held' && Date.parse(row.expires_at) > Date.parse(asOf))).toBe(true);
+    const confirmedB = await confirm('session-B', planB.planId);
+    expect(confirmedB.some((event) => event.type === 'card' &&
+      (event.card as Record<string, unknown>).status === 'confirmed')).toBe(true);
+
+    const planC = await planTrip('session-C');
+    const chaos = await postJson(env.baseUrl, '/api/chaos', { server: 'stay' });
+    expect(chaos.ok).toBe(true);
+    const eventsC = await confirm('session-C', planC.planId);
+    expect(eventsC.some((event) => event.type === 'recovery')).toBe(true);
+    expect(eventsC.some((event) => event.type === 'recovery' && /confirmation failed on stay/i.test(String(event.detail)))).toBe(true);
+    expect(eventsC.some((event) => event.type === 'card' &&
+      (event.card as Record<string, unknown>).status === 'rolled_back')).toBe(true);
+    expect(eventsC.some((event) => event.type === 'card' &&
+      (event.card as Record<string, unknown>).status === 'confirmed')).toBe(true);
+    const rolledBackRows = holdRows(planC.holdIds);
+    expect(rolledBackRows).toHaveLength(planC.holdIds.length);
+    expect(rolledBackRows.filter((row) => row.state === 'cancelled')).toHaveLength(planC.holdIds.length - 1);
+    expect(rolledBackRows.filter((row) => row.state === 'released')).toHaveLength(1);
+  } finally {
+    await env.close();
+  }
+}, 30_000);
+
 test('S4 compensates confirmed legs after stay chaos, replans, and confirms every new leg', async () => {
   const env = await fixture();
   try {

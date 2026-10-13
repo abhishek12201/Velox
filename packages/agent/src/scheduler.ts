@@ -30,8 +30,13 @@ export class TripScheduler {
     private readonly sessions: () => AgentSession[],
     private readonly registry: Registry,
     private readonly provider: LlmProvider,
-    private currentTime: string,
-  ) {}
+    initialTime?: string,
+    private readonly timeSource: () => number = Date.now,
+  ) {
+    this.offset = initialTime === undefined ? 0 : Date.parse(initialTime) - this.timeSource();
+  }
+
+  private offset: number;
 
   private async holdIndoorAlternative(
     session: AgentSession,
@@ -40,6 +45,7 @@ export class TripScheduler {
     maxUnit: number,
     qty: number,
   ): Promise<{ hold: HeldActivity; offer: Record<string, unknown> } | undefined> {
+    const currentTime = this.now();
     const tools: ToolDefinition[] = [
       ...this.registry.tools
         .filter((tool) => tool.server === 'local' && tool.audience === 'llm' &&
@@ -52,8 +58,9 @@ export class TripScheduler {
       content: `__S6_INDOOR_SWAP__${JSON.stringify({ area, day, maxUnit, qty })}`,
     }];
     for (let step = 0; step < 4; step += 1) {
+      const turnId = ++session.turnId;
       const answer = await this.provider.converse({
-        system: `Current time: ${this.currentTime}\nChoose an indoor activity at or below INR ${maxUnit} per person.`,
+        system: `Current time: ${currentTime}\nChoose an indoor activity at or below INR ${maxUnit} per person.`,
         messages,
         tools,
         maxTokens: 500,
@@ -62,13 +69,17 @@ export class TripScheduler {
       if (!calls.length) break;
       const mapped = calls.map((call) => ({ id: call.id || randomUUID(), name: call.name, input: call.input }));
       messages.push({ role: 'assistant', content: JSON.stringify({ tool_calls: mapped }) });
-      for (const call of calls) {
+      for (const call of mapped) {
         if (!tools.some((tool) => tool.name === call.name)) throw new Error(`S6 planner attempted an unavailable tool: ${call.name}`);
         let value: Record<string, unknown>;
         if (call.name.startsWith('internal__')) {
-          value = invokeInternalTool(call.name, call.input, session.ledger, session.id, this.currentTime).result;
+          value = invokeInternalTool(call.name, call.input, session.ledger, session.id, currentTime).result;
         } else {
-          value = await this.registry.invoke(call.name, call.input, this.currentTime);
+          value = await this.registry.invoke(call.name, call.input, currentTime, {
+            sessionId: session.id,
+            turnId,
+            toolCallId: call.id,
+          });
           if (Array.isArray(value.offers)) {
             for (const offer of value.offers) {
               if (offer && typeof offer === 'object' && typeof (offer as Record<string, unknown>).id === 'string') {
@@ -118,12 +129,14 @@ export class TripScheduler {
   setNow(value: string): void {
     const parsed = Date.parse(value);
     if (!Number.isFinite(parsed)) throw new Error('Clock value must be a valid ISO timestamp');
-    this.currentTime = new Date(parsed).toISOString();
-    for (const session of this.sessions()) session.asOf = this.currentTime;
+    this.offset = parsed - this.timeSource();
+    this.now();
   }
 
   now(): string {
-    return this.currentTime;
+    const currentTime = new Date(this.timeSource() + this.offset).toISOString();
+    for (const session of this.sessions()) session.asOf = currentTime;
+    return currentTime;
   }
 
   start(onEvents: (sessionId: string, events: LoopEvent[]) => void): void {
@@ -145,7 +158,8 @@ export class TripScheduler {
 
   async tick(): Promise<Map<string, LoopEvent[]>> {
     const emitted = new Map<string, LoopEvent[]>();
-    const now = Date.parse(this.currentTime);
+    const currentTime = this.now();
+    const now = Date.parse(currentTime);
     for (const session of this.sessions()) {
       for (const [tripPlanId, plan] of session.ledger.plans) {
         const card = session.ledger.cards.get(tripPlanId);
@@ -169,11 +183,11 @@ export class TripScheduler {
         if (area !== 'north' && area !== 'south' && area !== 'central') continue;
         const key = `${tripPlanId}:${day}:weather`;
         if (this.sent.has(key)) continue;
-        const weather = forecast(area, day, this.currentTime);
+        const weather = forecast(area, day, currentTime);
         if (!weather.rain) continue;
         const weatherResult = await this.registry.invoke('local__get_forecast', {
           area, date_from: day, date_to: day,
-        }, this.currentTime);
+        }, currentTime);
         const forecastDays = weatherResult.forecast;
         if (!Array.isArray(forecastDays) || !forecastDays.some((entry) =>
           entry && typeof entry === 'object' && (entry as Record<string, unknown>).condition === 'rain',
@@ -202,7 +216,7 @@ export class TripScheduler {
           hold_ids: [newHold.hold_id],
           total: newHold.amount,
           budget: newHold.amount,
-          created: this.currentTime,
+          created: currentTime,
         };
         session.ledger.plans.set(planId, swapPlan);
         const swap: Swap = { oldHoldId: outdoor.hold_id, newHoldId: newHold.hold_id, tripPlanId, day, reason: 'weather' };

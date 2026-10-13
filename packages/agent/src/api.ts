@@ -11,6 +11,7 @@ export interface AgentAppOptions {
   serverUrls?: Partial<Record<ServerName, string>>;
   provider?: LlmProvider;
   asOf?: string;
+  timeSource?: () => number;
 }
 
 function writeSse(res: Response, event: LoopEvent | { type: 'done' }): void {
@@ -27,6 +28,7 @@ function newSession(id: string, asOf: string): AgentSession {
   return {
     id,
     asOf,
+    turnId: 0,
     messages: [],
     ledger: {
       offers: new Map(),
@@ -60,8 +62,9 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
     throw error;
   }
   const sessions = new Map<string, AgentSession>();
-  const defaultAsOf = options.asOf ?? new Date().toISOString();
-  const scheduler = new TripScheduler(() => [...sessions.values()], registry, provider, defaultAsOf);
+  const initialAsOf = options.asOf;
+  const timeSource = options.timeSource ?? (initialAsOf === undefined ? Date.now : () => Date.parse(initialAsOf));
+  const scheduler = new TripScheduler(() => [...sessions.values()], registry, provider, initialAsOf, timeSource);
   const pendingEvents = new Map<string, LoopEvent[]>();
   const subscribers = new Map<string, Set<EventSubscriber>>();
   const publish = (sessionId: string, events: LoopEvent[]) => {
@@ -198,7 +201,7 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
       : {};
     if (body.scope === 'all') {
       try {
-        const reset = await registry.invokeApp('vault__reset', {}, defaultAsOf);
+        const reset = await registry.invokeApp('vault__reset', {}, scheduler.now());
         if (reset.isError === true) throw new Error('Vault rejected the reset request');
         sessions.clear();
         res.status(200).json({ ok: true, reset: 'all' });
@@ -294,7 +297,7 @@ export async function createAgentApp(options: AgentAppOptions = {}): Promise<{
       res.status(400).json({ error: 'session_id and text are required' });
       return;
     }
-    const session = sessions.get(body.session_id) ?? newSession(body.session_id, options.asOf ?? defaultAsOf);
+    const session = sessions.get(body.session_id) ?? newSession(body.session_id, scheduler.now());
     sessions.set(session.id, session);
     session.messages.push({ role: 'user', content: body.text });
 

@@ -132,7 +132,7 @@ async function openEventStream(baseUrl: string, sessionId: string) {
   return stream;
 }
 
-async function fixture() {
+async function fixture(agentOptions: { asOf?: string; timeSource?: () => number } = { asOf }) {
   const dataDir = await mkdtemp(join(tmpdir(), `velox-scheduler-${randomUUID()}-`));
   const dbPaths = Object.fromEntries(names.map((name) => [name, join(dataDir, `${name}.db`) ])) as Record<typeof names[number], string>;
   const servers: Server[] = [];
@@ -146,7 +146,7 @@ async function fixture() {
       servers.push(server);
       serverUrls[name] = `http://127.0.0.1:${await waitForPort(server)}/mcp`;
     }
-    agent = await createAgentApp({ serverUrls, provider: new ScenarioProvider(), asOf });
+    agent = await createAgentApp({ serverUrls, provider: new ScenarioProvider(), ...agentOptions });
     apiServer = createHttpServer(agent.app);
     apiServer.listen(0, '127.0.0.1');
     const baseUrl = `http://127.0.0.1:${await waitForPort(apiServer)}`;
@@ -195,6 +195,18 @@ async function fixture() {
     throw error;
   }
 }
+
+test('default virtual clock advances with real time', async () => {
+  const env = await fixture({});
+  try {
+    const first = await fetch(`${env.baseUrl}/api/clock`).then((response) => response.json()) as { now: string };
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const second = await fetch(`${env.baseUrl}/api/clock`).then((response) => response.json()) as { now: string };
+    expect(Date.parse(second.now)).toBeGreaterThan(Date.parse(first.now));
+  } finally {
+    await env.close();
+  }
+});
 
 async function confirmedOutdoorTrip(
   env: Awaited<ReturnType<typeof fixture>>,

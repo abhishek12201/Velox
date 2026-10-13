@@ -143,7 +143,6 @@ export class ScenarioProvider implements LlmProvider {
         offer_id: offer.id,
         when: `${swap.day}T10:00:00.000Z`,
         party: swap.qty,
-        idem_key: `s6-indoor-${swap.day}-${offer.id}`,
       }, 's6-indoor-hold')]);
     }
     if (userTexts.some((userText) => /S8|unauthorized confirmation/i.test(userText))) {
@@ -298,8 +297,6 @@ export class ScenarioProvider implements LlmProvider {
         ...missingHolds.map((spec, index) => inputFor(spec.tool, input.tools, {
           ...spec.args,
           offer_id: spec.offer.id,
-          ...(spec.tool === 'air__hold_flight' ? {} : {}),
-          idem_key: `scenario-${matched.id}-${responses.length}-${index}-${spec.offer.id}`,
         }, `hold-${responses.length}-${index}`)),
       ]);
     }
@@ -310,7 +307,7 @@ export class ScenarioProvider implements LlmProvider {
         .map((response) => response.value.hold_id).filter((id): id is string => typeof id === 'string');
       if (holdIds.length !== holdSpecs.length) {
         return result(holdSpecs.map((spec, index) => inputFor(spec.tool, input.tools, {
-          ...spec.args, offer_id: spec.offer.id, idem_key: `scenario-${matched.id}-retry-${proposed}-${index}`,
+          ...spec.args, offer_id: spec.offer.id,
         }, `rehold-${proposed}-${index}`)));
       }
       if (failedProposal) {

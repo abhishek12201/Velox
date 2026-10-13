@@ -27,7 +27,12 @@ interface RegistryClient {
 
 export interface Registry {
   tools: RegistryTool[];
-  invoke(name: string, args: Record<string, unknown>, asOf: string): Promise<Record<string, unknown>>;
+  invoke(
+    name: string,
+    args: Record<string, unknown>,
+    asOf: string,
+    idempotency?: { sessionId: string; turnId: number; toolCallId: string },
+  ): Promise<Record<string, unknown>>;
   invokeApp(name: string, args: Record<string, unknown>, asOf: string): Promise<Record<string, unknown>>;
   setChaos(server: ServerName | null): Promise<void>;
   close(): Promise<void>;
@@ -42,10 +47,11 @@ function publicSchema(schema: Record<string, unknown>): Record<string, unknown> 
   if (schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)) {
     const properties = { ...(schema.properties as Record<string, unknown>) };
     delete properties.as_of;
+    delete properties.idem_key;
     result.properties = properties;
   }
   if (Array.isArray(schema.required)) {
-    result.required = schema.required.filter((field) => field !== 'as_of');
+    result.required = schema.required.filter((field) => field !== 'as_of' && field !== 'idem_key');
   }
   return result;
 }
@@ -112,7 +118,13 @@ export async function createRegistry(urls: Partial<Record<ServerName, string>> =
     clients.set(entry.server, entry);
   }
   const tools = connected.flatMap((entry) => entry.tools);
-  async function invokeTool(name: string, args: Record<string, unknown>, asOf: string, appOnly: boolean) {
+  async function invokeTool(
+    name: string,
+    args: Record<string, unknown>,
+    asOf: string,
+    appOnly: boolean,
+    idempotency?: { sessionId: string; turnId: number; toolCallId: string },
+  ) {
     const tool = tools.find((entry) => entry.name === name);
     if (!tool) throw new Error(`Unknown MCP tool: ${name}`);
     if ((tool.audience === 'app') !== appOnly) {
@@ -122,16 +134,25 @@ export async function createRegistry(urls: Partial<Record<ServerName, string>> =
     }
     const entry = clients.get(tool.server);
     if (!entry) throw new Error(`MCP server is not connected: ${tool.server}`);
+    if (tool.remoteName.startsWith('hold_') && !idempotency) {
+      throw new Error(`An idempotency context is required for ${name}`);
+    }
     const result = await entry.client.callTool({
       name: tool.remoteName,
-      arguments: { ...args, as_of: asOf },
+      arguments: {
+        ...args,
+        ...(tool.remoteName.startsWith('hold_') && idempotency
+          ? { idem_key: `${idempotency.sessionId}:${idempotency.turnId}:${idempotency.toolCallId}` }
+          : {}),
+        as_of: asOf,
+      },
     });
     return structuredResult(result);
   }
   return {
     tools,
-    invoke(name, args, asOf) {
-      return invokeTool(name, args, asOf, false);
+    invoke(name, args, asOf, idempotency) {
+      return invokeTool(name, args, asOf, false, idempotency);
     },
     invokeApp(name, args, asOf) {
       return invokeTool(name, args, asOf, true);

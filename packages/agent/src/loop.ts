@@ -8,6 +8,7 @@ import { systemPrompt } from './prompt.js';
 export interface AgentSession {
   id: string;
   asOf: string;
+  turnId: number;
   messages: LlmMessage[];
   ledger: SessionLedger;
 }
@@ -95,6 +96,7 @@ async function executeTool(
   call: ToolUseBlock,
   registry: Registry,
   session: AgentSession,
+  turnId: number,
 ): Promise<ToolCallResult> {
   const started = Date.now();
   try {
@@ -102,7 +104,11 @@ async function executeTool(
       const result = invokeInternalTool(call.name, call.input, session.ledger, session.id, session.asOf);
       return { call, response: result.result, ok: true, elapsedMs: Date.now() - started, card: result.card, chip: result.chip };
     }
-    const response = await registry.invoke(call.name, call.input, session.asOf);
+    const response = await registry.invoke(call.name, call.input, session.asOf, {
+      sessionId: session.id,
+      turnId,
+      toolCallId: call.id,
+    });
     rememberResult(call, response, session.ledger);
     const ok = response.isError !== true;
     return { call, response: compactResult(response), ok, elapsedMs: Date.now() - started };
@@ -179,6 +185,7 @@ export async function runLoop(
   let system = systemPrompt(session.asOf, compactProfile(profile));
 
   for (let step = 0; step < maxSteps; step += 1) {
+    const turnId = ++session.turnId;
     const answer = await provider.converse({
       system,
       messages: session.messages,
@@ -192,6 +199,7 @@ export async function runLoop(
     if (toolCalls.length === 0) return events;
 
     const calls = toolCalls.map((call) => ({
+      type: 'tool_use' as const,
       id: call.id || randomUUID(),
       name: call.name,
       input: call.input,
@@ -201,7 +209,7 @@ export async function runLoop(
       content: JSON.stringify({ tool_calls: calls }),
     });
 
-    for (const call of toolCalls) {
+    for (const call of calls) {
       const server = call.name.split('__')[0] ?? 'unknown';
       const tool = call.name.split('__').slice(1).join('__');
       events.push({
@@ -213,7 +221,7 @@ export async function runLoop(
         ts: new Date().toISOString(),
       });
     }
-    const results = await Promise.all(toolCalls.map((call) => executeTool(call, registry, session)));
+    const results = await Promise.all(calls.map((call) => executeTool(call, registry, session, turnId)));
     for (const result of results) {
       const server = result.call.name.split('__')[0] ?? 'unknown';
       const tool = result.call.name.split('__').slice(1).join('__');

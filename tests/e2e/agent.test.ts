@@ -118,6 +118,13 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
 
     const suppliedTools = providerInputs.flatMap((input) => input.tools.map((tool) => tool.name));
     expect(suppliedTools.some((name) => /confirm_|cancel_booking|save_trip|vault__reset/.test(name))).toBe(false);
+    const holdTools = providerInputs.flatMap((input) => input.tools)
+      .filter((tool) => /__hold_(flight|stay|table)$/.test(tool.name));
+    expect(holdTools.length).toBeGreaterThan(0);
+    expect(holdTools.every((tool) => {
+      const properties = tool.inputSchema.properties;
+      return !properties || typeof properties !== 'object' || !('idem_key' in properties);
+    })).toBe(true);
     expect(providerInputs.some((input) => input.messages.some((message) => {
       if (message.role !== 'tool' || !/hold_(flight|stay|table)$/.test(message.name ?? '')) return false;
       const value: unknown = JSON.parse(message.content);

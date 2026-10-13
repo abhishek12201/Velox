@@ -60,11 +60,12 @@ async function reholdSamePlan(
   if (!departure) return undefined;
   const checkout = new Date(Date.parse(`${departure}T00:00:00Z`) + 2 * 86400000).toISOString().slice(0, 10);
   const reheld: Array<{ tool: string; id: string; input: Record<string, unknown>; value: Record<string, unknown> }> = [];
+  const turnId = ++session.turnId;
   for (const hold of oldHolds) {
     if (!hold) return undefined;
     const offer = session.ledger.offers.get(hold.offer_id);
     if (!offer) return undefined;
-    const base = { offer_id: hold.offer_id, idem_key: `${planId}:rehold:${hold.hold_id}` };
+    const base = { offer_id: hold.offer_id };
     const tool = hold.server === 'air' ? 'air__hold_flight'
       : hold.server === 'stay' ? 'stay__hold_stay'
         : 'local__hold_table';
@@ -73,7 +74,12 @@ async function reholdSamePlan(
       : hold.server === 'stay'
         ? { ...base, checkin: departure, checkout, guests: hold.qty }
         : { ...base, when: `${departure}T19:00:00.000Z`, party: hold.qty };
-    const value = await registry.invoke(tool, args, session.asOf);
+    const id = `rehold-${hold.hold_id}`;
+    const value = await registry.invoke(tool, args, session.asOf, {
+      sessionId: session.id,
+      turnId,
+      toolCallId: id,
+    });
     if (structuredError(value) || typeof value.hold_id !== 'string' || typeof value.amount !== 'number' || typeof value.expires_at !== 'string') {
       return undefined;
     }
@@ -87,7 +93,7 @@ async function reholdSamePlan(
       state: 'held' as const,
     };
     session.ledger.holds.set(newHold.hold_id, newHold);
-    reheld.push({ tool, id: `rehold-${newHold.hold_id}`, input: args, value });
+    reheld.push({ tool, id, input: args, value });
   }
   session.messages.push({
     role: 'assistant',
