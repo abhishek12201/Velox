@@ -8,6 +8,7 @@ import { expect, test } from 'vitest';
 import { createAgentApp } from '../../packages/agent/src/api.js';
 import { ScenarioProvider } from '../../packages/agent/src/llm/mock.js';
 import { start } from '../../packages/servers/src/main.js';
+import { eventsFrom } from './events.js';
 
 const asOf = '2026-06-01T00:00:00.000Z';
 const names = ['air', 'stay', 'local', 'vault'] as const;
@@ -27,16 +28,6 @@ async function closeServer(server: Server): Promise<void> {
   if (!server.listening) return;
   await new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());
-  });
-}
-
-function eventsFrom(body: string): Array<Record<string, unknown>> {
-  return body.split('\n\n').flatMap((frame) => {
-    const data = frame.split('\n').find((line) => line.startsWith('data: '))?.slice(6);
-    if (!data) return [];
-    const value: unknown = JSON.parse(data);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid SSE event');
-    return [value as Record<string, unknown>];
   });
 }
 
@@ -114,6 +105,11 @@ test('S3 confirms each held leg and saves the itinerary', async () => {
   try {
     const chat = await postJson(env.baseUrl, '/api/chat', { session_id: 's3', text: 'S3 Weekend in Goa under 20k' });
     const chatEvents = eventsFrom(await chat.text());
+    const chatItineraryCards = chatEvents.filter((event) => event.type === 'card' &&
+      (event.card as Record<string, unknown>).kind === 'itinerary');
+    expect(chatItineraryCards.filter((event) =>
+      (event.card as Record<string, unknown>).status === 'proposed',
+    )).toHaveLength(1);
     const itinerary = chatEvents.filter((event) => event.type === 'card')
       .map((event) => event.card as Record<string, unknown>)
       .find((card) => card.kind === 'itinerary');
@@ -223,17 +219,39 @@ test('S4 compensates confirmed legs after stay chaos, replans, and confirms ever
   try {
     const chat = await postJson(env.baseUrl, '/api/chat', { session_id: 's4', text: 'S4 Weekend in Goa under 20k' });
     const chatEvents = eventsFrom(await chat.text());
-    const itinerary = chatEvents.filter((event) => event.type === 'card')
+    const chatItineraryCards = chatEvents.filter((event) => event.type === 'card' &&
+      (event.card as Record<string, unknown>).kind === 'itinerary');
+    expect(chatItineraryCards.filter((event) =>
+      (event.card as Record<string, unknown>).status === 'proposed',
+    )).toHaveLength(1);
+    const itinerary = chatItineraryCards
       .map((event) => event.card as Record<string, unknown>)
       .find((card) => card.kind === 'itinerary');
     expect(itinerary?.plan_id).toBeTypeOf('string');
     const chaos = await postJson(env.baseUrl, '/api/chaos', { server: 'stay' });
     expect(chaos.ok).toBe(true);
+    const chaosResult = await chaos.json() as Record<string, unknown>;
+    expect(chaosResult.active).toBe(true);
     const response = await postJson(env.baseUrl, '/api/confirm', {
       session_id: 's4',
       plan_id: itinerary?.plan_id,
     });
     const events = eventsFrom(await response.text());
+    const itineraryCards = events.filter((event) => event.type === 'card' &&
+      (event.card as Record<string, unknown>).kind === 'itinerary');
+    const proposedCards = itineraryCards.filter((event) =>
+      (event.card as Record<string, unknown>).status === 'proposed',
+    );
+    const proposalsByPlan = new Map<string, number>();
+    for (const event of proposedCards) {
+      const planId = (event.card as Record<string, unknown>).plan_id;
+      expect(typeof planId).toBe('string');
+      proposalsByPlan.set(planId as string, (proposalsByPlan.get(planId as string) ?? 0) + 1);
+    }
+    expect([...proposalsByPlan.values()].every((count) => count === 1)).toBe(true);
+    expect(proposedCards).toHaveLength(1);
+    console.log(`Live S4 itinerary card events: chat=${chatItineraryCards.length}, chaos=0, confirm=${itineraryCards.length}; step-limit errors=0`);
+    expect(events.filter((event) => event.type === 'say')).toHaveLength(1);
     expect(events.filter((event) => event.type === 'recovery').length).toBeGreaterThan(0);
     const finalCard = events.filter((event) => event.type === 'card')
       .map((event) => event.card as Record<string, unknown>)

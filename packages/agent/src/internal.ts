@@ -93,6 +93,16 @@ function makeItinerary(
 ): { result: Record<string, unknown>; card?: Card } {
   if (!Number.isInteger(budget) || budget < 0) throw new Error('budget must be a non-negative integer');
   if (new Set(holdIds).size !== holdIds.length) throw new Error('hold_ids must not contain duplicates');
+  const sortedHoldIds = [...holdIds].sort();
+  for (const [planId, plan] of ledger.plans) {
+    if (
+      plan.kind === 'trip' &&
+      plan.hold_ids.length === sortedHoldIds.length &&
+      [...plan.hold_ids].sort().every((holdId, index) => holdId === sortedHoldIds[index])
+    ) {
+      return { result: { ok: true, duplicate: true, plan: { ...plan, plan_id: planId } } };
+    }
+  }
   const holds = holdIds.map((holdId) => {
     const hold = ledger.holds.get(holdId);
     if (!hold) throw new Error('Every proposed hold must exist in this session');

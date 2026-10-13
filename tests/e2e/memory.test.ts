@@ -9,6 +9,7 @@ import type { LlmMessage, LlmProvider } from '../../packages/agent/src/llm/types
 import { ScenarioProvider } from '../../packages/agent/src/llm/mock.js';
 import { createAgentApp } from '../../packages/agent/src/api.js';
 import { start } from '../../packages/servers/src/main.js';
+import { eventsFrom } from './events.js';
 
 async function waitForPort(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -19,16 +20,6 @@ async function waitForPort(server: Server): Promise<number> {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Test server did not bind to a TCP port');
   return address.port;
-}
-
-function eventsFrom(body: string): Array<Record<string, unknown>> {
-  return body.split('\n\n').flatMap((frame) => {
-    const data = frame.split('\n').find((line) => line.startsWith('data: '))?.slice(6);
-    if (!data) return [];
-    const value: unknown = JSON.parse(data);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid SSE event');
-    return [value as Record<string, unknown>];
-  });
 }
 
 async function postJson(baseUrl: string, path: string, body: Record<string, unknown>): Promise<Response> {

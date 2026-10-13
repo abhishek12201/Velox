@@ -302,9 +302,15 @@ export class ScenarioProvider implements LlmProvider {
     }
 
     const proposed = responses.filter((response) => response.name === 'internal__propose_itinerary').length;
-    if (recovery || !responses.some((response) => response.name === 'internal__propose_itinerary' && response.value.ok === true)) {
-      const holdIds = activeHolds.filter((response) => !releasedIds.has(response.value.hold_id as string))
-        .map((response) => response.value.hold_id).filter((id): id is string => typeof id === 'string');
+    const holdIds = activeHolds.filter((response) => !releasedIds.has(response.value.hold_id as string))
+      .map((response) => response.value.hold_id).filter((id): id is string => typeof id === 'string');
+    const holdSet = [...holdIds].sort();
+    const alreadyProposed = responses.some((response) => {
+      if (response.name !== 'internal__propose_itinerary' || response.value.ok !== true || !Array.isArray(response.args.hold_ids)) return false;
+      const previousHoldIds = response.args.hold_ids.filter((id): id is string => typeof id === 'string').sort();
+      return previousHoldIds.length === holdSet.length && previousHoldIds.every((id, index) => id === holdSet[index]);
+    });
+    if (!alreadyProposed) {
       if (holdIds.length !== holdSpecs.length) {
         return result(holdSpecs.map((spec, index) => inputFor(spec.tool, input.tools, {
           ...spec.args, offer_id: spec.offer.id,

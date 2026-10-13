@@ -8,6 +8,7 @@ import type { LlmMessage, LlmProvider, ToolDefinition, ToolUseBlock } from './ll
 import { ScenarioProvider } from '../../packages/agent/src/llm/mock.js';
 import { createAgentApp } from '../../packages/agent/src/api.js';
 import { start } from '../../packages/servers/src/main.js';
+import { eventsFrom } from './events.js';
 
 async function waitForListening(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -24,16 +25,6 @@ async function closeServer(server: Server): Promise<void> {
   if (!server.listening) return;
   await new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());
-  });
-}
-
-function sseEvents(text: string): Array<Record<string, unknown>> {
-  return text.split('\n\n').flatMap((frame) => {
-    const data = frame.split('\n').find((line) => line.startsWith('data: '))?.slice(6);
-    if (!data) return [];
-    const value: unknown = JSON.parse(data);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid SSE event');
-    return [value as Record<string, unknown>];
   });
 }
 
@@ -95,7 +86,7 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
       body: JSON.stringify({ session_id: 's1', text: 'Weekend in Goa under 20k' }),
     });
     expect(response.status).toBe(200);
-    const events = sseEvents(await response.text());
+    const events = eventsFrom(await response.text());
     const calls = events.filter((event) => event.type === 'call');
     const results = events.filter((event) => event.type === 'result');
     const cards = events.filter((event) => event.type === 'card');

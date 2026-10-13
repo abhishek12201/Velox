@@ -25,6 +25,7 @@ interface ToolCallResult {
   elapsedMs: number;
   card?: Card;
   chip?: string;
+  proposalResult?: 'created' | 'duplicate';
 }
 
 function readStructuredValue(value: Record<string, unknown>): Record<string, unknown> {
@@ -102,7 +103,18 @@ async function executeTool(
   try {
     if (call.name.startsWith('internal__')) {
       const result = invokeInternalTool(call.name, call.input, session.ledger, session.id, session.asOf);
-      return { call, response: result.result, ok: true, elapsedMs: Date.now() - started, card: result.card, chip: result.chip };
+      const proposalResult = call.name === 'internal__propose_itinerary' && result.result.ok === true
+        ? result.result.duplicate === true ? 'duplicate' : 'created'
+        : undefined;
+      return {
+        call,
+        response: result.result,
+        ok: result.result.ok !== false,
+        elapsedMs: Date.now() - started,
+        card: result.card,
+        chip: result.chip,
+        proposalResult,
+      };
     }
     const response = await registry.invoke(call.name, call.input, session.asOf, {
       sessionId: session.id,
@@ -183,6 +195,8 @@ export async function runLoop(
   const events: LoopEvent[] = [];
   let profile = await registry.invoke('vault__get_profile', {}, session.asOf);
   let system = systemPrompt(session.asOf, compactProfile(profile));
+  let proposalCalls = 0;
+  let replannedForBudget = false;
 
   for (let step = 0; step < maxSteps; step += 1) {
     const turnId = ++session.turnId;
@@ -193,10 +207,12 @@ export async function runLoop(
       maxTokens,
     });
     const toolCalls = answer.blocks.filter((block): block is ToolUseBlock => block.type === 'tool_use');
-    for (const block of answer.blocks) {
-      if (block.type === 'text' && block.text) events.push({ type: 'say', text: block.text });
+    if (toolCalls.length === 0) {
+      for (const block of answer.blocks) {
+        if (block.type === 'text' && block.text) events.push({ type: 'say', text: block.text });
+      }
+      return events;
     }
-    if (toolCalls.length === 0) return events;
 
     const calls = toolCalls.map((call) => ({
       type: 'tool_use' as const,
@@ -221,7 +237,21 @@ export async function runLoop(
         ts: new Date().toISOString(),
       });
     }
-    const results = await Promise.all(calls.map((call) => executeTool(call, registry, session, turnId)));
+    const results: ToolCallResult[] = await Promise.all(calls.map((call) => {
+      if (call.name !== 'internal__propose_itinerary') {
+        return executeTool(call, registry, session, turnId);
+      }
+      proposalCalls += 1;
+      if (proposalCalls <= 3) return executeTool(call, registry, session, turnId);
+      return Promise.resolve({
+        call,
+        response: { ok: false, isError: true, message: 'Proposal limit reached; stop proposing and answer in text.' },
+        ok: false,
+        elapsedMs: 0,
+      } satisfies ToolCallResult);
+    }));
+    let createdProposal: Extract<Card, { kind: 'itinerary' }> | undefined;
+    let duplicateProposal = false;
     for (const result of results) {
       const server = result.call.name.split('__')[0] ?? 'unknown';
       const tool = result.call.name.split('__').slice(1).join('__');
@@ -232,7 +262,15 @@ export async function runLoop(
         ok: result.ok,
         summary: summary(result.response),
       });
-      if (result.card) events.push({ type: 'card', card: result.card });
+      if (result.card) {
+        events.push({ type: 'card', card: result.card });
+        if (result.proposalResult === 'created' && result.card.kind === 'itinerary') {
+          createdProposal = result.card;
+        }
+      }
+      if (result.proposalResult === 'duplicate') duplicateProposal = true;
+      if (result.call.name === 'internal__propose_itinerary' &&
+        typeof result.response.over_by === 'number') replannedForBudget = true;
       if (result.chip) events.push({ type: 'chip', text: result.chip });
       session.messages.push({
         role: 'tool',
@@ -251,6 +289,15 @@ export async function runLoop(
         system = systemPrompt(session.asOf, compactProfile(profile));
       }
     }
+    if (createdProposal) {
+      const itemCount = createdProposal.days.reduce((count, day) => count + day.items.length, 0);
+      events.push({
+        type: 'say',
+        text: `Your ${createdProposal.title} plan is ready: ${itemCount} item${itemCount === 1 ? '' : 's'}, INR ${createdProposal.total} of INR ${createdProposal.budget}.${replannedForBudget ? ' I swapped in lower-priced options to fit your budget.' : ''}`,
+      });
+      return events;
+    }
+    if (duplicateProposal) return events;
   }
   events.push({ type: 'error', message: `Agent reached the ${maxSteps}-step limit before completing the response` });
   return events;

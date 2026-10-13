@@ -8,6 +8,7 @@ import { afterEach, expect, test } from 'vitest';
 import { createAgentApp } from '../../packages/agent/src/api.js';
 import { ScenarioProvider } from '../../packages/agent/src/llm/mock.js';
 import { start } from '../../packages/servers/src/main.js';
+import { assertNoStepLimit, eventsFrom } from './events.js';
 
 const asOf = '2026-06-01T00:00:00.000Z';
 const names = ['air', 'stay', 'local', 'vault'] as const;
@@ -26,16 +27,6 @@ async function waitForPort(server: Server): Promise<number> {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Test server did not bind to a TCP port');
   return address.port;
-}
-
-function eventsFrom(body: string): Array<Record<string, unknown>> {
-  return body.split('\n\n').flatMap((frame) => {
-    const data = frame.split('\n').find((line) => line.startsWith('data: '))?.slice(6);
-    if (!data) return [];
-    const value: unknown = JSON.parse(data);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid SSE event');
-    return [value as Record<string, unknown>];
-  });
 }
 
 async function postJson(baseUrl: string, path: string, body: Record<string, unknown>): Promise<Response> {
@@ -69,6 +60,7 @@ async function openEventStream(baseUrl: string, sessionId: string) {
     const value: unknown = JSON.parse(data);
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid SSE event');
     const event = value as Record<string, unknown>;
+    assertNoStepLimit([event]);
     events.push(event);
     for (const waiter of waiters) {
       if (!waiter.predicate(event)) continue;
