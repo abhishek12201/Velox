@@ -2,19 +2,14 @@ export type ErrorCode = 'NOT_FOUND' | 'SOLD_OUT' | 'HOLD_EXPIRED' | 'FORBIDDEN' 
 
 export interface ErrorResult {
   isError: true;
-  structuredContent: {
-    code: ErrorCode;
-    message: string;
-    retryable: boolean;
-  };
   content: Array<{ type: 'text'; text: string }>;
 }
 
 export function makeError(code: ErrorCode, message: string, retryable = false): ErrorResult {
+  const details = { isError: true, code, message, retryable };
   return {
+    content: [{ type: 'text', text: JSON.stringify(details) }],
     isError: true,
-    structuredContent: { code, message, retryable },
-    content: [{ type: 'text', text: message }],
   };
 }
 

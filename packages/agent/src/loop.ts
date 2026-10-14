@@ -83,6 +83,14 @@ function compactResult(result: Record<string, unknown>): Record<string, unknown>
 
 function summary(result: Record<string, unknown>): string {
   const structured = readStructuredValue(result);
+  if (structured.isError === true) {
+    const code = typeof structured.code === 'string' ? structured.code : undefined;
+    const message = typeof structured.message === 'string' ? structured.message : undefined;
+    if (code && message) return `${code}: ${message}`;
+    if (message) return message;
+    if (code) return code;
+    return JSON.stringify(structured) ?? 'Tool call failed without error details.';
+  }
   if (Array.isArray(structured.offers)) return `${structured.offers.length} offers`;
   if (typeof structured.amount === 'number') return `held INR ${structured.amount}`;
   if (structured.ok === false && typeof structured.over_by === 'number') return `over budget by INR ${structured.over_by}`;
@@ -90,7 +98,7 @@ function summary(result: Record<string, unknown>): string {
     const card = structured.card as Record<string, unknown>;
     return typeof card.total === 'number' ? `itinerary total INR ${card.total}` : 'options shown';
   }
-  return structured.isError === true ? 'tool returned an error' : 'completed';
+  return 'completed';
 }
 
 function stableJson(value: unknown): string {
@@ -310,6 +318,8 @@ export async function runLoop(
         ms: result.elapsedMs,
         ok: result.ok,
         summary: summary(result.response),
+        ...(typeof result.response.code === 'string' ? { code: result.response.code } : {}),
+        ...(typeof result.response.message === 'string' ? { message: result.response.message } : {}),
       });
       if (result.card) {
         events.push({ type: 'card', card: result.card });

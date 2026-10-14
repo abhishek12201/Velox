@@ -20,6 +20,7 @@ describe('agent event reducer', () => {
     [{ type: 'say', text: 'Hello' }, (state) => expect(state.feed.at(-1)).toMatchObject({ kind: 'say', text: 'Hello' })],
     [{ type: 'call', id: 'call-1', server: 'air', tool: 'search', args: {}, ts: '2026-06-01T00:00:00.000Z' }, (state) => expect(state.trace[0]?.[0]?.call.tool).toBe('search')],
     [{ type: 'result', id: 'call-1', ms: 12, ok: true, summary: '1 offer' }, (state) => expect(state.trace[0]?.[0]?.result?.summary).toBe('1 offer')],
+    [{ type: 'result', id: 'call-1', ms: 12, ok: false, summary: 'SOLD_OUT: food_1 already booked', code: 'SOLD_OUT', message: 'food_1 already booked' }, (state) => expect(state.trace[0]?.[0]?.result).toMatchObject({ ok: false, code: 'SOLD_OUT', message: 'food_1 already booked' })],
     [{ type: 'card', card: itinerary }, (state) => expect(state.feed.at(-1)).toMatchObject({ kind: 'card', card: itinerary })],
     [{ type: 'chip', text: 'Remembered a preference' }, (state) => expect(state.memoryChips).toContain('Remembered a preference')],
     [{ type: 'recovery', step: 1, detail: 'The stay was rebooked.' }, (state) => expect(state.feed.at(-1)).toMatchObject({ kind: 'recovery', step: 1 })],

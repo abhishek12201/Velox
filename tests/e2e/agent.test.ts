@@ -50,12 +50,26 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
 
     const delegate = new ScenarioProvider();
     const providerInputs: Array<{ messages: LlmMessage[]; tools: ToolDefinition[] }> = [];
+    let failNextHold = false;
     const provider: LlmProvider = {
       async converse(input) {
         providerInputs.push({
           messages: input.messages.map((message) => ({ ...message })),
           tools: input.tools.map((tool) => ({ ...tool })),
         });
+        if (failNextHold) {
+          failNextHold = false;
+          return {
+            blocks: [{
+              type: 'tool_use',
+              id: 'missing-local-offer',
+              name: 'local__hold_table',
+              input: { offer_id: 'missing-food', when: '2026-06-05T19:00:00.000Z', party: 1 },
+            }],
+            stop: 'tool_use',
+            usage: { inputTokens: 0, outputTokens: 0 },
+          };
+        }
         const answer = await delegate.converse(input);
         return {
           ...answer,
@@ -141,6 +155,20 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
     const itineraryItems = (itinerary.days as Array<{ items: Array<{ hold_id: string; amount: number }> }>)
       .flatMap((day) => day.items);
     expect(itineraryItems.every((item) => held.get(item.hold_id) === item.amount)).toBe(true);
+
+    failNextHold = true;
+    const failedHoldResponse = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: 'failed-hold-trace', text: 'Trigger the failed hold trace' }),
+    });
+    const failedHoldEvents = eventsFrom(await failedHoldResponse.text());
+    expect(failedHoldEvents.find((event) => event.type === 'result' && event.id === 'missing-local-offer')).toMatchObject({
+      ok: false,
+      code: 'NOT_FOUND',
+      message: 'Local offer missing-food was not found',
+      summary: 'NOT_FOUND: Local offer missing-food was not found',
+    });
 
     const reset = await fetch(`${baseUrl}/api/reset`, {
       method: 'POST',

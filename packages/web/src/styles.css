@@ -111,8 +111,10 @@ button:focus-visible, input:focus-visible, summary:focus-visible, [tabindex="0"]
 .trace-group { margin-bottom: 20px; }
 .parallel-label { color: var(--teal); font-size: .75rem; text-transform: uppercase; letter-spacing: .1em; }
 .trace-entry { margin: 7px 0; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.trace-entry-failed { border-color: var(--red); }
 .trace-entry summary { display: flex; justify-content: space-between; gap: 8px; padding: 11px; cursor: pointer; font-size: .78rem; }
 .trace-entry p { padding: 0 11px; margin: 0 0 8px; color: var(--muted); font-size: .78rem; }
+.trace-entry .trace-error-reason { color: var(--red); }
 .trace-entry pre { overflow-x: auto; max-height: 220px; padding: 11px; margin: 0; border-top: 1px solid var(--line); color: #d5d0c7; font-size: .72rem; }
 .trace-ok { color: var(--green); }
 .trace-failed { color: var(--red); }

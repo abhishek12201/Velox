@@ -114,11 +114,9 @@ export const CardSchema = z.discriminatedUnion('kind', [
 
 export const ErrorResultSchema = z.object({
   isError: z.literal(true),
-  structuredContent: z.object({
-    code: z.enum(['NOT_FOUND', 'SOLD_OUT', 'HOLD_EXPIRED', 'FORBIDDEN', 'INVALID']),
-    message: z.string(),
-    retryable: z.boolean(),
-  }),
+  code: z.enum(['NOT_FOUND', 'SOLD_OUT', 'HOLD_EXPIRED', 'FORBIDDEN', 'INVALID']),
+  message: z.string(),
+  retryable: z.boolean(),
 });
 
 export const SseSaySchema = z.object({
@@ -142,6 +140,8 @@ export const SseResultSchema = z.object({
   ms: z.number(),
   ok: z.boolean(),
   summary: z.string(),
+  code: z.string().optional(),
+  message: z.string().optional(),
 });
 
 export const SseCardSchema = z.object({

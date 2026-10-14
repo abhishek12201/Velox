@@ -345,12 +345,12 @@ function App() {
                 <section className="trace-group" key={`trace-${index}`}>
                   {group.length > 1 && <p className="parallel-label">Parallel calls · {group.length}</p>}
                   {group.map(({ call, result }) => (
-                    <details key={call.id} className="trace-entry">
+                    <details key={call.id} className={`trace-entry${result?.ok === false ? ' trace-entry-failed' : ''}`}>
                       <summary>
                         <span>{call.server} · {call.tool} · {result ? `${result.ms} ms` : 'running'}</span>
                         {result && <strong className={result.ok ? 'trace-ok' : 'trace-failed'}>{result.ok ? 'Done' : 'Failed'}</strong>}
                       </summary>
-                      <p>{result?.summary ?? 'Waiting for result'}</p>
+                      <p className={result?.ok === false ? 'trace-error-reason' : undefined}>{result?.summary ?? 'Waiting for result'}</p>
                       <pre>{JSON.stringify(call.args, null, 2)}</pre>
                     </details>
                   ))}

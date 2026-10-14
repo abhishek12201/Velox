@@ -178,3 +178,40 @@ test('repeated failed calls are skipped and two all-failed steps release this tu
   )).toBe(true);
   expect(events.some((event) => event.type === 'error' && /step limit/i.test(String(event.message)))).toBe(false);
 });
+
+test('failed tool results preserve their error code and message for the SSE trace', async () => {
+  const current = session([]);
+  let providerCalls = 0;
+  const provider: LlmProvider = {
+    async converse() {
+      providerCalls += 1;
+      return providerCalls === 1
+        ? {
+          blocks: [{
+            type: 'tool_use',
+            id: 'failed-hold',
+            name: 'local__hold_table',
+            input: { offer_id: 'food_1', when: '2026-10-16T19:00:00.000Z', party: 1 },
+          }],
+          stop: 'tool_use',
+          usage: { inputTokens: 0, outputTokens: 0 },
+        }
+        : { blocks: [{ type: 'text', text: 'I will choose another offer.' }], stop: 'end_turn', usage: { inputTokens: 0, outputTokens: 0 } };
+    },
+  };
+  const testRegistry: Registry = {
+    ...registry,
+    async invoke(name) {
+      if (name === 'vault__get_profile') return { profile: [] };
+      return { isError: true, code: 'SOLD_OUT', message: 'food_1 already booked' };
+    },
+  };
+
+  const events = await runLoop(current, provider, testRegistry);
+  expect(events.find((event) => event.type === 'result' && event.id === 'failed-hold')).toMatchObject({
+    ok: false,
+    code: 'SOLD_OUT',
+    message: 'food_1 already booked',
+    summary: 'SOLD_OUT: food_1 already booked',
+  });
+});

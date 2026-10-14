@@ -60,7 +60,10 @@ function structuredResult(result: unknown): Record<string, unknown> {
   if (result && typeof result === 'object' && !Array.isArray(result)) {
     const value = result as Record<string, unknown>;
     if (value.structuredContent && typeof value.structuredContent === 'object' && !Array.isArray(value.structuredContent)) {
-      return value.structuredContent as Record<string, unknown>;
+      return {
+        ...value.structuredContent as Record<string, unknown>,
+        ...(value.isError === true ? { isError: true } : {}),
+      };
     }
     const text = Array.isArray(value.content)
       ? value.content.find((entry) => entry && typeof entry === 'object' && (entry as Record<string, unknown>).type === 'text')
