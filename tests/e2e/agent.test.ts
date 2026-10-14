@@ -138,6 +138,9 @@ test('S1 streams parallel searches, holds, and a code-computed itinerary without
       }
     }
     expect(itinerary.total).toBe([...held.values()].reduce((sum, amount) => sum + amount, 0));
+    const itineraryItems = (itinerary.days as Array<{ items: Array<{ hold_id: string; amount: number }> }>)
+      .flatMap((day) => day.items);
+    expect(itineraryItems.every((item) => held.get(item.hold_id) === item.amount)).toBe(true);
 
     const reset = await fetch(`${baseUrl}/api/reset`, {
       method: 'POST',

@@ -39,14 +39,16 @@ function holdCountdown(expiresAt: string, now: number): string {
   return `${minutes}m ${String(seconds).padStart(2, '0')}s remaining`;
 }
 
-function ItineraryCard({ card, onConfirm, onChange, now, busy }: {
+function ItineraryCard({ card, onConfirm, onChange, now, busy, hasReplacement }: {
   card: Itinerary;
   onConfirm: (planId: string) => void;
   onChange: () => void;
   now: number;
   busy: boolean;
+  hasReplacement: boolean;
 }) {
   const expired = Date.parse(card.expires_at) <= now;
+  const notBookable = card.status === 'rolled_back' || card.status === 'failed';
   const progress = card.budget > 0 ? Math.min(100, (card.total / card.budget) * 100) : 100;
   return (
     <article className="itinerary card-surface">
@@ -83,10 +85,14 @@ function ItineraryCard({ card, onConfirm, onChange, now, busy }: {
       <div className="card-actions">
         <button
           className="primary"
-          disabled={busy || card.status === 'confirmed' || expired}
+          disabled={busy || card.status === 'confirmed' || expired || notBookable}
           onClick={() => onConfirm(card.plan_id)}
         >
-          {card.status === 'confirmed' ? 'Confirmed' : `Confirm all (${money(card.total)})`}
+          {card.status === 'confirmed'
+            ? 'Confirmed'
+            : notBookable
+              ? hasReplacement ? 'Replaced by a new plan' : 'Not booked'
+              : `Confirm all (${money(card.total)})`}
         </button>
         <button className="secondary" onClick={onChange}>Change plan</button>
       </div>
@@ -152,9 +158,17 @@ function renderCard(card: Card, handlers: {
   carouselIndex: number;
   setCarouselIndex: (index: number) => void;
   choose: (index: number) => void;
+  hasReplacement: boolean;
 }) {
   if (card.kind === 'itinerary') {
-    return <ItineraryCard card={card} onConfirm={handlers.confirm} onChange={handlers.change} now={handlers.now} busy={handlers.busy} />;
+    return <ItineraryCard
+      card={card}
+      onConfirm={handlers.confirm}
+      onChange={handlers.change}
+      now={handlers.now}
+      busy={handlers.busy}
+      hasReplacement={handlers.hasReplacement}
+    />;
   }
   if (card.kind === 'nudge') return <NudgeCard card={card} onAccept={handlers.accept} busy={handlers.busy} />;
   return (
@@ -174,6 +188,7 @@ function App() {
   const [breakBooking, setBreakBooking] = useState(false);
   const [now, setNow] = useState(Date.now());
   const feedEnd = useRef<HTMLDivElement>(null);
+  const handledStayFailures = useRef(0);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -182,6 +197,14 @@ function App() {
 
   useEffect(() => {
     feedEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [state.feed]);
+
+  useEffect(() => {
+    const count = state.feed.filter((item) =>
+      item.kind === 'recovery' && /confirmation failed on stay/i.test(item.detail),
+    ).length;
+    if (count > handledStayFailures.current) setBreakBooking(false);
+    handledStayFailures.current = count;
   }, [state.feed]);
 
   const submit = (text = draft) => {
@@ -264,11 +287,18 @@ function App() {
             if (item.kind === 'say') return (
               <p key={item.id} className={`message message-${item.role}`}>{item.text}</p>
             );
-            if (item.kind === 'card') return (
-              <div key={`card-${index}`} className="feed-card">
-                {renderCard(item.card, handlers)}
-              </div>
-            );
+            if (item.kind === 'card') {
+              const hasReplacement = item.card.kind === 'itinerary' &&
+                (item.card.status === 'rolled_back' || item.card.status === 'failed') &&
+                state.feed.slice(index + 1).some((next) =>
+                  next.kind === 'card' && next.card.kind === 'itinerary' && next.card.status === 'proposed',
+                );
+              return (
+                <div key={`card-${index}`} className="feed-card">
+                  {renderCard(item.card, { ...handlers, hasReplacement })}
+                </div>
+              );
+            }
             if (item.kind === 'recovery') return (
               <div key={`recovery-${index}`} className="recovery-note" role="status">
                 <strong>Recovery step {item.step}</strong><p>{item.detail}</p>

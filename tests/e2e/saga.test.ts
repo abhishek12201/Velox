@@ -217,6 +217,8 @@ test('separate sessions receive distinct holds and stay-CHAOS recovery rolls bac
 test('S4 compensates confirmed legs after stay chaos, replans, and confirms every new leg', async () => {
   const env = await fixture();
   try {
+    const chaos = await postJson(env.baseUrl, '/api/chaos', { server: 'stay' });
+    expect(chaos.ok).toBe(true);
     const chat = await postJson(env.baseUrl, '/api/chat', { session_id: 's4', text: 'S4 Weekend in Goa under 20k' });
     const chatEvents = eventsFrom(await chat.text());
     const chatItineraryCards = chatEvents.filter((event) => event.type === 'card' &&
@@ -228,15 +230,31 @@ test('S4 compensates confirmed legs after stay chaos, replans, and confirms ever
       .map((event) => event.card as Record<string, unknown>)
       .find((card) => card.kind === 'itinerary');
     expect(itinerary?.plan_id).toBeTypeOf('string');
-    const chaos = await postJson(env.baseUrl, '/api/chaos', { server: 'stay' });
-    expect(chaos.ok).toBe(true);
-    const chaosResult = await chaos.json() as Record<string, unknown>;
-    expect(chaosResult.active).toBe(true);
+    const originalItems = (itinerary?.days as Array<{ items: Array<{ hold_id: string; kind: string }> }>)
+      .flatMap((day) => day.items)
+      .filter((item) => item.kind === 'local');
+    const localDb = new Database(env.dbPaths.local, { readonly: true });
+    let originalLocalOffers: string[];
+    try {
+      const rows = localDb.prepare(
+        `SELECT offer_id FROM holds WHERE hold_id IN (${originalItems.map(() => '?').join(',')})`,
+      ).all(...originalItems.map((item) => item.hold_id)) as Array<{ offer_id: string }>;
+      originalLocalOffers = rows.map((row) => row.offer_id);
+    } finally {
+      localDb.close();
+    }
+    expect(originalLocalOffers).toHaveLength(originalItems.length);
     const response = await postJson(env.baseUrl, '/api/confirm', {
       session_id: 's4',
       plan_id: itinerary?.plan_id,
     });
     const events = eventsFrom(await response.text());
+    const localHoldCalls = new Set(events.filter((event) =>
+      event.type === 'call' && event.server === 'local' && event.tool === 'hold_table',
+    ).map((event) => event.id));
+    expect(events.filter((event) =>
+      event.type === 'result' && localHoldCalls.has(event.id as string) && event.ok === false,
+    )).toHaveLength(0);
     const itineraryCards = events.filter((event) => event.type === 'card' &&
       (event.card as Record<string, unknown>).kind === 'itinerary');
     const proposedCards = itineraryCards.filter((event) =>
@@ -277,6 +295,16 @@ test('S4 compensates confirmed legs after stay chaos, replans, and confirms ever
       expect(states.some((row) => row.state === 'confirmed')).toBe(true);
     } finally {
       stayDb.close();
+    }
+    const recoveredLocalDb = new Database(env.dbPaths.local, { readonly: true });
+    try {
+      const rows = recoveredLocalDb.prepare('SELECT offer_id, state FROM holds').all() as Array<{ offer_id: string; state: string }>;
+      for (const offerId of originalLocalOffers) {
+        expect(rows.some((row) => row.offer_id === offerId && row.state === 'cancelled')).toBe(true);
+        expect(rows.some((row) => row.offer_id === offerId && row.state === 'confirmed')).toBe(true);
+      }
+    } finally {
+      recoveredLocalDb.close();
     }
   } finally {
     await env.close();

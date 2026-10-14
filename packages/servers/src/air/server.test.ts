@@ -90,6 +90,24 @@ test('search -> hold -> release -> expiry works', async () => {
   expect(after.structuredContent).toBeTruthy();
 });
 
+test('flight search and hold amounts stay stable within the same as_of day', async () => {
+  const client = await connect();
+  const searchAsOf = '2026-06-01T00:00:00.000Z';
+  const holdAsOf = '2026-06-01T00:00:02.000Z';
+  const search = await client.callTool({
+    name: 'search_flights',
+    arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1, as_of: searchAsOf },
+  });
+  const offer = (search.structuredContent as { offers: Array<{ id: string; price_per_pax: number }> }).offers[0];
+  expect(offer).toBeDefined();
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
+  const hold = await client.callTool({
+    name: 'hold_flight',
+    arguments: { offer_id: offer.id, pax: 1, idem_key: 'same-day-price', as_of: holdAsOf },
+  });
+  expect((hold.structuredContent as { amount: number }).amount).toBe(offer.price_per_pax);
+});
+
 test('confirm without token or with wrong token is forbidden; valid token confirms', async () => {
   const client = await connect();
   const search = await client.callTool({ name: 'search_flights', arguments: { origin: 'BLR', destination: 'GOX', date: '2026-06-30', pax: 1, as_of: testAsOf } });

@@ -93,6 +93,40 @@ function summary(result: Record<string, unknown>): string {
   return structured.isError === true ? 'tool returned an error' : 'completed';
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function releaseTurnHolds(
+  session: AgentSession,
+  holdsAtStart: Set<string>,
+  registry: Registry,
+  events: LoopEvent[],
+): Promise<void> {
+  for (const hold of session.ledger.holds.values()) {
+    if (holdsAtStart.has(hold.hold_id) || hold.state !== 'held') continue;
+    const tool = `${hold.server}__release_hold`;
+    try {
+      const result = await registry.invoke(tool, { hold_id: hold.hold_id }, session.asOf);
+      if (result.state !== 'released') {
+        events.push({ type: 'error', message: `Could not release hold ${hold.hold_id}: ${String(result.message ?? result.code ?? 'unexpected result')}` });
+        continue;
+      }
+      session.ledger.holds.set(hold.hold_id, { ...hold, state: 'released' });
+    } catch (error) {
+      events.push({
+        type: 'error',
+        message: `Could not release hold ${hold.hold_id}: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+}
+
 async function executeTool(
   call: ToolUseBlock,
   registry: Registry,
@@ -193,10 +227,13 @@ export async function runLoop(
   const maxTokens = options.maxTokens ?? Number(process.env.VELOX_MAX_TOKENS ?? 1500);
   const availableTools = toolDefinitions(registry.tools);
   const events: LoopEvent[] = [];
+  const holdsAtStart = new Set(session.ledger.holds.keys());
+  const failedCalls = new Set<string>();
   let profile = await registry.invoke('vault__get_profile', {}, session.asOf);
   let system = systemPrompt(session.asOf, compactProfile(profile));
   let proposalCalls = 0;
   let replannedForBudget = false;
+  let consecutiveFailedSteps = 0;
 
   for (let step = 0; step < maxSteps; step += 1) {
     const turnId = ++session.turnId;
@@ -238,6 +275,18 @@ export async function runLoop(
       });
     }
     const results: ToolCallResult[] = await Promise.all(calls.map((call) => {
+      const failureKey = `${call.name}:${stableJson(call.input)}`;
+      if (failedCalls.has(failureKey)) {
+        return Promise.resolve({
+          call,
+          response: {
+            isError: true,
+            message: 'This tool call already failed in this turn; choose different offers or answer in text.',
+          },
+          ok: false,
+          elapsedMs: 0,
+        } satisfies ToolCallResult);
+      }
       if (call.name !== 'internal__propose_itinerary') {
         return executeTool(call, registry, session, turnId);
       }
@@ -289,6 +338,9 @@ export async function runLoop(
         system = systemPrompt(session.asOf, compactProfile(profile));
       }
     }
+    for (const result of results) {
+      if (!result.ok) failedCalls.add(`${result.call.name}:${stableJson(result.call.input)}`);
+    }
     if (createdProposal) {
       const itemCount = createdProposal.days.reduce((count, day) => count + day.items.length, 0);
       events.push({
@@ -298,6 +350,16 @@ export async function runLoop(
       return events;
     }
     if (duplicateProposal) return events;
+    if (results.length > 0 && results.every((result) => !result.ok)) {
+      consecutiveFailedSteps += 1;
+    } else {
+      consecutiveFailedSteps = 0;
+    }
+    if (consecutiveFailedSteps >= 2) {
+      await releaseTurnHolds(session, holdsAtStart, registry, events);
+      events.push({ type: 'say', text: 'I could not secure a replacement plan. Nothing was charged.' });
+      return events;
+    }
   }
   events.push({ type: 'error', message: `Agent reached the ${maxSteps}-step limit before completing the response` });
   return events;

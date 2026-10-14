@@ -100,7 +100,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function flightsFor(origin: string, destination: string, date: string, asOf: string): FlightOffer[] {
-  const random = stableRandom(origin, destination, date, asOf);
+  const random = stableRandom(origin, destination, date, isoDate(asOf));
   const count = 7 + Math.floor(random() * 3);
   const times = [330, 390, 480, 570, 690, 840, 1010, 1210, 1500, 1770, 1980, 1350];
   const carriers = ['AeroMitra', 'SkyFable'];
